@@ -8,3 +8,6 @@ langgraph-checkpoint-sqlite
 langchain-ollama
 
 python-dotenv
+pytest
+pytest-cov
+ruff

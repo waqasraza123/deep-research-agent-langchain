@@ -28,10 +28,18 @@ class RunRequest(BaseModel):
     thread_id: str | None = None
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    settings: Settings | None = None,
+    service: AgentService | None = None,
+) -> FastAPI:
+    """
+    Production: call with no args.
+    Tests: pass settings and a fake service to avoid external dependencies.
+    """
     configure_logging()
-    settings = Settings.load()
-    service = AgentService(settings)
+    settings = settings or Settings.load()
+    service = service or AgentService(settings)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -43,7 +51,6 @@ def create_app() -> FastAPI:
     def run(req: RunRequest) -> dict[str, Any]:
         thread_id = req.thread_id or str(uuid.uuid4())
 
-        # ensure folder exists early
         ensure_thread_dir(settings.runs_dir, thread_id)
 
         user_msg = req.question.strip()
@@ -61,7 +68,6 @@ def create_app() -> FastAPI:
             )
         except Exception as e:
             log.exception("agent.invoke failed")
-            # still guarantee artifacts exist
             warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
             raise HTTPException(
                 status_code=500,
@@ -72,7 +78,6 @@ def create_app() -> FastAPI:
                 },
             )
 
-        # Extract last assistant content if present (best-effort)
         summary_text = None
         if isinstance(result, dict) and "messages" in result and result["messages"]:
             last = result["messages"][-1]
