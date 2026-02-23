@@ -1,3 +1,10 @@
-pytest==8.3.4
-ruff==0.9.6
-mypy==1.14.1
+fastapi
+uvicorn
+httpx
+
+deepagents
+langgraph
+langgraph-checkpoint-sqlite
+langchain-ollama
+
+python-dotenv

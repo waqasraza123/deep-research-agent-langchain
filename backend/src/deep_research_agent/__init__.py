@@ -1,4 +1,2 @@
-__all__ = ["hello"]
-
-def hello() -> str:
-    return "deep-research-agent ready"
+__all__ = ["__version__"]
+__version__ = "0.1.0"
