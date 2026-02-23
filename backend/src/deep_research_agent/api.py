@@ -27,6 +27,9 @@ class RunRequest(BaseModel):
     urls: list[str] = []
     thread_id: str | None = None
 
+    max_sources: int = Field(default=8, ge=1, le=30)
+    max_links_per_source: int = Field(default=12, ge=0, le=50)
+    follow_links: bool = True
 
 def create_app(
     *,
@@ -59,7 +62,12 @@ def create_app(
                 f"- {u}" for u in req.urls
             )
 
-        agent = service.build_agent(thread_id)
+        agent = service.build_agent(
+            thread_id,
+            max_sources=req.max_sources,
+            max_links_per_source=req.max_links_per_source,
+            follow_links=req.follow_links,
+        )
 
         try:
             result = agent.invoke(

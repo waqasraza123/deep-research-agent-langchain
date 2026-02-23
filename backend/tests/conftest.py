@@ -47,7 +47,7 @@ class FakeService:
         self.runs_dir = runs_dir
         self.should_fail = should_fail
 
-    def build_agent(self, thread_id: str):
+    def build_agent(self, thread_id: str, *args, **kwargs):
         return FakeAgent(self.runs_dir, thread_id, should_fail=self.should_fail)
 
 
