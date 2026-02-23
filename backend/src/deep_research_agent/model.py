@@ -14,6 +14,7 @@ def create_chat_model(settings: Settings):
         return ChatOllama(
             model=settings.ollama_model,
             temperature=settings.temperature,
+            num_predict=settings.ollama_num_predict,
         )
 
     raise RuntimeError("Unsupported MODEL_PROVIDER for Phase 1. Use MODEL_PROVIDER=ollama.")

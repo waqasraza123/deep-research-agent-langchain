@@ -40,17 +40,13 @@ def _env_float(key: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class Settings:
-    # model
     model_provider: str
     ollama_model: str
     temperature: float
-
-    # runtime / safety
+    ollama_num_predict: int
     runs_dir: Path
     max_page_chars: int
     http_timeout_s: float
-
-    # api
     host: str
     port: int
 
@@ -60,6 +56,7 @@ class Settings:
             model_provider=_env_str("MODEL_PROVIDER", "ollama").lower(),
             ollama_model=_env_str("OLLAMA_MODEL", "llama3.1"),
             temperature=_env_float("TEMPERATURE", 0.2),
+            ollama_num_predict=_env_int("OLLAMA_NUM_PREDICT", 220),
             runs_dir=REPO_ROOT / "runs",
             max_page_chars=_env_int("MAX_PAGE_CHARS", 250_000),
             http_timeout_s=_env_float("HTTP_TIMEOUT_S", 25.0),

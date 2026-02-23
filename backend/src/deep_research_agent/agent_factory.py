@@ -149,7 +149,7 @@ class AgentService:
                 "local_text_path": f"runs/{thread_id}/sources/{url_hash}.txt",
                 "truncated": truncated,
                 "links": links,
-                "preview": text[:800],
+                "preview": text[:50],
             }
 
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
