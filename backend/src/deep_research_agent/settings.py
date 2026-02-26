@@ -72,12 +72,12 @@ class Settings:
             openai_base_url=_env_str("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1"),
             openai_api_key=_env_str("OPENAI_API_KEY", "no-key"),
             openai_model=_env_str("OPENAI_MODEL", "any-model"),
-            openai_max_tokens=_env_int("OPENAI_MAX_TOKENS", 700),
-            openai_timeout_s=_env_float("OPENAI_TIMEOUT_S", 60.0),
-            openai_max_retries=_env_int("OPENAI_MAX_RETRIES", 1),
+            openai_max_tokens=_env_int("OPENAI_MAX_TOKENS", 250),
+            openai_timeout_s=_env_float("OPENAI_TIMEOUT_S", 600.0),
+            openai_max_retries=_env_int("OPENAI_MAX_RETRIES", 0),
 
             runs_dir=REPO_ROOT / "runs",
-            max_page_chars=_env_int("MAX_PAGE_CHARS", 250_000),
+            max_page_chars=_env_int("MAX_PAGE_CHARS", 20000),
             http_timeout_s=_env_float("HTTP_TIMEOUT_S", 25.0),
 
             host=_env_str("HOST", "127.0.0.1"),
