@@ -41,12 +41,22 @@ def _env_float(key: str, default: float) -> float:
 @dataclass(frozen=True)
 class Settings:
     model_provider: str
-    ollama_model: str
     temperature: float
+
+    ollama_model: str
     ollama_num_predict: int
+
+    openai_base_url: str
+    openai_api_key: str
+    openai_model: str
+    openai_max_tokens: int
+    openai_timeout_s: float
+    openai_max_retries: int
+
     runs_dir: Path
     max_page_chars: int
     http_timeout_s: float
+
     host: str
     port: int
 
@@ -54,12 +64,22 @@ class Settings:
     def load() -> "Settings":
         return Settings(
             model_provider=_env_str("MODEL_PROVIDER", "ollama").lower(),
-            ollama_model=_env_str("OLLAMA_MODEL", "llama3.1"),
             temperature=_env_float("TEMPERATURE", 0.2),
+
+            ollama_model=_env_str("OLLAMA_MODEL", "llama3.1"),
             ollama_num_predict=_env_int("OLLAMA_NUM_PREDICT", 220),
+
+            openai_base_url=_env_str("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1"),
+            openai_api_key=_env_str("OPENAI_API_KEY", "no-key"),
+            openai_model=_env_str("OPENAI_MODEL", "any-model"),
+            openai_max_tokens=_env_int("OPENAI_MAX_TOKENS", 700),
+            openai_timeout_s=_env_float("OPENAI_TIMEOUT_S", 60.0),
+            openai_max_retries=_env_int("OPENAI_MAX_RETRIES", 1),
+
             runs_dir=REPO_ROOT / "runs",
             max_page_chars=_env_int("MAX_PAGE_CHARS", 250_000),
             http_timeout_s=_env_float("HTTP_TIMEOUT_S", 25.0),
+
             host=_env_str("HOST", "127.0.0.1"),
             port=_env_int("PORT", 8000),
         )

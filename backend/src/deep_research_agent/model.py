@@ -4,10 +4,19 @@ from .settings import Settings
 
 
 def create_chat_model(settings: Settings):
-    """
-    Phase 1: free local via Ollama.
-    Phase 5: swap to Anthropic here only.
-    """
+    if settings.model_provider == "llamacpp":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=settings.openai_model,
+            base_url=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            temperature=settings.temperature,
+            max_tokens=settings.openai_max_tokens,
+            timeout=settings.openai_timeout_s,
+            max_retries=settings.openai_max_retries,
+        )
+
     if settings.model_provider == "ollama":
         from langchain_ollama import ChatOllama
 
@@ -17,4 +26,4 @@ def create_chat_model(settings: Settings):
             num_predict=settings.ollama_num_predict,
         )
 
-    raise RuntimeError("Unsupported MODEL_PROVIDER for Phase 1. Use MODEL_PROVIDER=ollama.")
+    raise RuntimeError("Unsupported MODEL_PROVIDER. Use llamacpp or ollama.")
