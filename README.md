@@ -1,4 +1,4 @@
-````md
+```md
 # Deep Research Agent (Deep Agents + LangGraph)
 
 A production-grade research agent that:
@@ -28,7 +28,6 @@ Each run produces:
 
 1. Create `.env` in the repo root:
 
-```bash
 MODEL_PROVIDER=openai
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=your_key_here
@@ -40,11 +39,10 @@ OPENAI_MAX_TOKENS=350
 MAX_PAGE_CHARS=15000
 HTTP_TIMEOUT_S=20
 ```
-````
 
 2. Install and run backend:
 
-```bash
+```
 python3 -m venv backend/.venv
 source backend/.venv/bin/activate
 pip install -r backend/requirements.txt
