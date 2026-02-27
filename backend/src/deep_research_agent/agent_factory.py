@@ -5,7 +5,6 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -76,6 +75,7 @@ class AgentService:
             return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
         def fetch_and_store(url: str) -> str:
+            """Fetch a URL, store text to runs/<thread_id>/sources, return compact JSON metadata."""
             if not (url.startswith("http://") or url.startswith("https://")):
                 return json.dumps({"ok": False, "error": "only http(s) allowed", "url": url})
 
@@ -139,7 +139,6 @@ class AgentService:
                 meta["links"] = links
 
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-
             seen_urls.add(url)
             return json.dumps(meta, ensure_ascii=False)
 
