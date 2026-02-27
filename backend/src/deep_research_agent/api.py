@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -27,19 +28,16 @@ class RunRequest(BaseModel):
     urls: list[str] = []
     thread_id: str | None = None
 
-    max_sources: int = Field(default=8, ge=1, le=30)
-    max_links_per_source: int = Field(default=12, ge=0, le=50)
-    follow_links: bool = True
+    max_sources: int = Field(default=1, ge=0, le=3)
+    max_links_per_source: int = Field(default=0, ge=0, le=10)
+    follow_links: bool = False
+
 
 def create_app(
     *,
     settings: Settings | None = None,
     service: AgentService | None = None,
 ) -> FastAPI:
-    """
-    Production: call with no args.
-    Tests: pass settings and a fake service to avoid external dependencies.
-    """
     configure_logging()
     settings = settings or Settings.load()
     service = service or AgentService(settings)
@@ -53,20 +51,20 @@ def create_app(
     @app.post("/run")
     def run(req: RunRequest) -> dict[str, Any]:
         thread_id = req.thread_id or str(uuid.uuid4())
+        td = ensure_thread_dir(settings.runs_dir, thread_id)
 
-        ensure_thread_dir(settings.runs_dir, thread_id)
+        urls = [u.strip() for u in req.urls if u and u.strip()]
+        urls = urls[: max(0, min(req.max_sources, 3))] if urls else []
 
         user_msg = req.question.strip()
-        if req.urls:
-            user_msg += "\n\nSources (use fetch_url on these):\n" + "\n".join(
-                f"- {u}" for u in req.urls
-            )
+        if urls:
+            user_msg += "\n\nSources (call fetch_and_store on these):\n" + "\n".join(f"- {u}" for u in urls)
 
         agent = service.build_agent(
             thread_id,
-            max_sources=req.max_sources,
-            max_links_per_source=req.max_links_per_source,
-            follow_links=req.follow_links,
+            max_sources=max(0, min(req.max_sources, 3)),
+            max_links_per_source=max(0, min(req.max_links_per_source, 10)),
+            follow_links=bool(req.follow_links),
         )
 
         try:
@@ -85,6 +83,26 @@ def create_app(
                     "warnings": warnings,
                 },
             )
+
+        missing = []
+        for name in ("plan.md", "notes.md", "sources.json", "report.md"):
+            if not (td / name).exists():
+                missing.append(name)
+
+        if missing:
+            repair = "Create missing files in /runs/{tid}:\n{files}\nUse provided URLs only.\nEnd after files exist.".format(
+                tid=thread_id,
+                files="\n".join(f"- {n}" for n in missing),
+            )
+            if urls:
+                repair += "\nURLs:\n" + "\n".join(f"- {u}" for u in urls)
+            try:
+                agent.invoke(
+                    {"messages": [{"role": "user", "content": repair}]},
+                    config={"configurable": {"thread_id": thread_id}},
+                )
+            except Exception:
+                log.exception("repair invoke failed")
 
         summary_text = None
         if isinstance(result, dict) and "messages" in result and result["messages"]:

@@ -4,7 +4,10 @@ from .settings import Settings
 
 
 def create_chat_model(settings: Settings):
-    if settings.model_provider == "llamacpp":
+    if settings.model_provider in ("openai", "llamacpp"):
+        if settings.model_provider == "openai" and not settings.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when MODEL_PROVIDER=openai")
+
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
@@ -26,4 +29,4 @@ def create_chat_model(settings: Settings):
             num_predict=settings.ollama_num_predict,
         )
 
-    raise RuntimeError("Unsupported MODEL_PROVIDER. Use llamacpp or ollama.")
+    raise RuntimeError("Unsupported MODEL_PROVIDER. Use openai, llamacpp, or ollama.")
