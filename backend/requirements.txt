@@ -12,3 +12,5 @@ pytest
 pytest-cov
 ruff
 langchain-openai
+pypdf
+python-docx

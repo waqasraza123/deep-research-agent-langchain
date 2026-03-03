@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import io
 import re
 import socket
 from dataclasses import dataclass
@@ -180,6 +181,76 @@ def _jina_reader_url(url: str) -> str:
     return f"https://r.jina.ai/{encoded}"
 
 
+def _detect_kind(url: str, content_type: str) -> str:
+    p = urlparse(url)
+    path = (p.path or "").lower()
+    ct = (content_type or "").lower()
+
+    if path.endswith(".pdf") or "application/pdf" in ct:
+        return "pdf"
+    if path.endswith(".docx") or "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in ct:
+        return "docx"
+    if path.endswith(".txt") or ct.startswith("text/plain"):
+        return "txt"
+    if path.endswith(".md") or ct in {"text/markdown", "text/x-markdown"}:
+        return "md"
+    if path.endswith(".csv") or ct.startswith("text/csv"):
+        return "csv"
+    if "html" in ct:
+        return "html"
+    if ct.startswith("text/"):
+        return "txt"
+    return "unknown"
+
+
+def _extract_pdf_text(data: bytes) -> tuple[bool, str]:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception:
+        return False, "PDF extraction requires pypdf. Install it to enable PDF support."
+
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        parts: list[str] = []
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            t = t.strip()
+            if t:
+                parts.append(t)
+        text = "\n\n".join(parts).strip()
+        if text:
+            return True, text
+        return False, "PDF extracted with pypdf but no text was found."
+    except Exception as e:
+        return False, f"PDF extraction failed: {type(e).__name__}: {e}"
+
+
+def _extract_docx_text(data: bytes) -> tuple[bool, str]:
+    try:
+        from docx import Document  # type: ignore
+    except Exception:
+        return False, "DOCX extraction requires python-docx. Install it to enable DOCX support."
+
+    try:
+        doc = Document(io.BytesIO(data))
+        parts: list[str] = []
+        for p in doc.paragraphs:
+            s = (p.text or "").strip()
+            if s:
+                parts.append(s)
+        for table in getattr(doc, "tables", []):
+            for row in table.rows:
+                cells = [(c.text or "").strip() for c in row.cells]
+                if any(cells):
+                    parts.append("\t".join(cells))
+        text = "\n".join(parts).strip()
+        if text:
+            return True, text
+        return False, "DOCX extracted with python-docx but no text was found."
+    except Exception as e:
+        return False, f"DOCX extraction failed: {type(e).__name__}: {e}"
+
+
 @dataclass(frozen=True)
 class FetchResult:
     ok: bool
@@ -193,12 +264,13 @@ class FetchResult:
     strategy: str
     word_count: int
     char_count: int
+    kind: str
 
 
-def _fetch_raw(url: str, *, timeout_s: float, max_bytes: int) -> tuple[str, str, int, str, bool]:
+def _fetch_bytes(url: str, *, timeout_s: float, max_bytes: int) -> tuple[bytes, str, int, str, bool]:
     headers = {
         "User-Agent": "deep-research-agent/0.1",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
+        "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
     }
     limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
@@ -222,8 +294,7 @@ def _fetch_raw(url: str, *, timeout_s: float, max_bytes: int) -> tuple[str, str,
                     truncated = True
                     break
                 buf.extend(chunk)
-            raw = buf.decode("utf-8", errors="replace")
-            return raw, final_url, status, ctype, truncated
+            return bytes(buf), final_url, status, ctype, truncated
 
 
 def fetch_document(
@@ -236,15 +307,16 @@ def fetch_document(
 ) -> FetchResult:
     url = _validate_url(url)
 
-    max_bytes = min(5_000_000, max(64_000, max_chars * 4))
-    raw, final_url, status, ctype, truncated_raw = _fetch_raw(url, timeout_s=timeout_s, max_bytes=max_bytes)
+    max_bytes = min(12_000_000, max(128_000, max_chars * 6))
+    data, final_url, status, ctype, truncated_raw = _fetch_bytes(url, timeout_s=timeout_s, max_bytes=max_bytes)
 
     _validate_url(final_url)
 
+    kind = _detect_kind(final_url, ctype)
+
     if status < 200 or status >= 300:
         text = f"Fetch failed with status {status}\nURL: {final_url}\n"
-        wc = _word_count(text)
-        cc = len(text.strip())
+        text = _normalize_text(text)
         return FetchResult(
             ok=False,
             url=url,
@@ -255,57 +327,143 @@ def fetch_document(
             title=None,
             truncated=False,
             strategy="direct",
-            word_count=wc,
-            char_count=cc,
+            word_count=_word_count(text),
+            char_count=len(text),
+            kind=kind,
         )
 
-    title = extract_title(raw) if "html" in ctype else None
-    extracted = raw
+    title: Optional[str] = None
+    extracted = ""
+    ok = True
     strategy = "direct"
 
-    if "html" in ctype:
+    if kind == "html":
+        raw = data.decode("utf-8", errors="replace")
+        title = extract_title(raw)
         extracted = html_to_text(raw)
+        extracted = _normalize_text(extracted)
+        wc = _word_count(extracted)
+        cc = len(extracted)
+        if (wc < min_words or cc < min_chars) or cc == 0:
+            jr = _jina_reader_url(final_url)
+            try:
+                data2, final_url2, status2, ctype2, truncated2 = _fetch_bytes(jr, timeout_s=timeout_s, max_bytes=max_bytes)
+                text2 = _normalize_text(data2.decode("utf-8", errors="replace"))
+                wc2 = _word_count(text2)
+                cc2 = len(text2)
+                if status2 >= 200 and status2 < 300 and wc2 >= min_words and cc2 >= min_chars:
+                    extracted = text2
+                    wc = wc2
+                    cc = cc2
+                    final_url = final_url2
+                    ctype = ctype2
+                    truncated_raw = truncated2
+                    strategy = "jina"
+            except Exception:
+                pass
 
-    extracted = _normalize_text(extracted)
-    wc = _word_count(extracted)
-    cc = len(extracted)
+        truncated = False
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
+            truncated = True
 
-    if (("html" in ctype) and (wc < min_words or cc < min_chars)) or cc == 0:
-        jr = _jina_reader_url(final_url or url)
-        try:
-            raw2, final_url2, status2, ctype2, truncated2 = _fetch_raw(jr, timeout_s=timeout_s, max_bytes=max_bytes)
-            text2 = _normalize_text(raw2)
-            wc2 = _word_count(text2)
-            cc2 = len(text2)
-            if status2 >= 200 and status2 < 300 and wc2 >= min_words and cc2 >= min_chars:
-                extracted = text2
-                wc = wc2
-                cc = cc2
-                final_url = final_url2
-                status = status2
-                ctype = ctype2
-                truncated_raw = truncated2
-                strategy = "jina"
-        except Exception:
-            pass
+        return FetchResult(
+            ok=True,
+            url=url,
+            final_url=final_url,
+            status_code=status,
+            content_type=ctype,
+            extracted_text=extracted,
+            title=title,
+            truncated=bool(truncated or truncated_raw),
+            strategy=strategy,
+            word_count=_word_count(extracted),
+            char_count=len(extracted),
+            kind=kind,
+        )
 
-    truncated = False
-    if len(extracted) > max_chars:
-        extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
-        truncated = True
+    if kind in {"txt", "md", "csv"}:
+        extracted = data.decode("utf-8", errors="replace")
+        extracted = _normalize_text(extracted)
+        truncated = False
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
+            truncated = True
+        return FetchResult(
+            ok=True,
+            url=url,
+            final_url=final_url,
+            status_code=status,
+            content_type=ctype,
+            extracted_text=extracted,
+            title=None,
+            truncated=bool(truncated or truncated_raw),
+            strategy="direct",
+            word_count=_word_count(extracted),
+            char_count=len(extracted),
+            kind=kind,
+        )
 
+    if kind == "pdf":
+        ok2, text = _extract_pdf_text(data)
+        ok = bool(ok2)
+        extracted = _normalize_text(text)
+        truncated = False
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
+            truncated = True
+        return FetchResult(
+            ok=ok,
+            url=url,
+            final_url=final_url,
+            status_code=status,
+            content_type=ctype,
+            extracted_text=extracted,
+            title=None,
+            truncated=bool(truncated or truncated_raw),
+            strategy="direct",
+            word_count=_word_count(extracted),
+            char_count=len(extracted),
+            kind=kind,
+        )
+
+    if kind == "docx":
+        ok2, text = _extract_docx_text(data)
+        ok = bool(ok2)
+        extracted = _normalize_text(text)
+        truncated = False
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
+            truncated = True
+        return FetchResult(
+            ok=ok,
+            url=url,
+            final_url=final_url,
+            status_code=status,
+            content_type=ctype,
+            extracted_text=extracted,
+            title=None,
+            truncated=bool(truncated or truncated_raw),
+            strategy="direct",
+            word_count=_word_count(extracted),
+            char_count=len(extracted),
+            kind=kind,
+        )
+
+    extracted = _normalize_text(f"Unsupported content-type: {ctype}\nURL: {final_url}\n")
     return FetchResult(
-        ok=True,
+        ok=False,
         url=url,
         final_url=final_url,
         status_code=status,
         content_type=ctype,
         extracted_text=extracted,
-        title=title,
-        truncated=bool(truncated or truncated_raw),
-        strategy=strategy,
-        word_count=wc,
-        char_count=cc,
+        title=None,
+        truncated=False,
+        strategy="direct",
+        word_count=_word_count(extracted),
+        char_count=len(extracted),
+        kind=kind,
     )
 
 
