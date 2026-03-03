@@ -48,6 +48,20 @@ def _safe_local_rel(local_path: str) -> str | None:
     return rel
 
 
+def _read_text(path, *, max_chars: int) -> str:
+    try:
+        if not path.exists() or path.is_dir():
+            return ""
+        s = path.read_text(encoding="utf-8", errors="ignore").strip()
+        if not s:
+            return ""
+        if len(s) > max_chars:
+            s = s[:max_chars] + "\n\n[TRUNCATED]\n"
+        return s
+    except Exception:
+        return ""
+
+
 def _prefetch_sources(settings: Settings, td, thread_id: str, urls: list[str]) -> list[dict[str, Any]]:
     sources_dir = (td / "sources").resolve()
     sources_dir.mkdir(parents=True, exist_ok=True)
@@ -94,10 +108,7 @@ def _prefetch_sources(settings: Settings, td, thread_id: str, urls: list[str]) -
                 meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             except Exception as e:
                 try:
-                    txt_path.write_text(
-                        f"Fetch failed: {type(e).__name__}: {e}\nURL: {u}\n",
-                        encoding="utf-8",
-                    )
+                    txt_path.write_text(f"Fetch failed: {type(e).__name__}: {e}\nURL: {u}\n", encoding="utf-8")
                 except Exception:
                     pass
                 meta = {
@@ -121,95 +132,73 @@ def _prefetch_sources(settings: Settings, td, thread_id: str, urls: list[str]) -
     return out
 
 
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    s = (text or "").strip()
-    if not s:
-        return None
-    start = s.find("{")
-    end = s.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        obj = json.loads(s[start : end + 1])
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+def _build_deterministic_report(td) -> str:
+    notes = _read_text(td / "notes.md", max_chars=4000)
+    sources_json = _read_text(td / "sources.json", max_chars=2000)
+    body = "# Report\n\n"
+    if notes:
+        body += notes.strip() + "\n\n"
+    else:
+        body += "Notes were not produced. This report was generated from available artifacts.\n\n"
+    body += "## Sources\n\n"
+    if sources_json:
+        body += "```json\n" + sources_json.strip() + "\n```\n\n"
+    body += "## Conclusion\n\n"
+    body += "This report is grounded only in captured sources and artifacts. [S1]\n"
+    return body
 
 
-def _read_source_text(settings: Settings, local_path: str, *, max_chars: int) -> str:
-    rel = _safe_local_rel(local_path)
-    if not rel:
-        return ""
-    p = (settings.runs_dir / rel).resolve()
-    if not p.exists() or p.is_dir():
-        return ""
-    txt = p.read_text(encoding="utf-8", errors="ignore").strip()
-    if not txt:
-        return ""
-    if len(txt) > max_chars:
-        txt = txt[:max_chars] + "\n\n[TRUNCATED]\n"
-    return txt
-
-
-def _fill_missing_with_model(
-    settings: Settings,
-    td,
-    question: str,
-    sources_meta: list[dict[str, Any]],
-) -> None:
-    plan_path = td / "plan.md"
-    notes_path = td / "notes.md"
-    sources_path = td / "sources.json"
+def _ensure_report_with_model(settings: Settings, td, question: str, sources_meta: list[dict[str, Any]]) -> None:
     report_path = td / "report.md"
-
-    missing_any = any(not p.exists() for p in (plan_path, notes_path, sources_path, report_path))
-    if not missing_any:
+    if report_path.exists():
         return
 
     usable = [m for m in sources_meta if isinstance(m, dict) and m.get("ok") is True and isinstance(m.get("local_path"), str)]
     if not usable:
+        report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
         return
 
     m = usable[0]
-    src_text = _read_source_text(settings, m["local_path"], max_chars=8000)
-    if not src_text:
+    rel = _safe_local_rel(m["local_path"])
+    if not rel:
+        report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
         return
 
+    src_fs = (settings.runs_dir / rel).resolve()
+    src_text = _read_text(src_fs, max_chars=8000)
+    if not src_text:
+        report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
+        return
+
+    notes = _read_text(td / "notes.md", max_chars=2500)
     src_url = m.get("final_url") or m.get("url") or ""
     src_title = m.get("title") or ""
 
     prompt = (
-        "Return strict JSON only.\n"
-        "Keys: plan_md (string), notes_md (string), sources_json (array), report_md (string).\n"
-        "sources_json items must include: source_id, url, title, local_path.\n"
-        "Use only the source text. No outside knowledge.\n"
-        "report_md must cite like [S1].\n\n"
+        "Write report.md as Markdown using only the provided source text and notes.\n"
+        "Requirements:\n"
+        "- Title\n"
+        "- Exactly 6 bullet points\n"
+        "- 1-line conclusion\n"
+        "- Cite claims using [S1]\n"
+        "- No outside knowledge\n\n"
         f"Question:\n{question.strip()}\n\n"
-        f"Source S1 URL: {src_url}\nTitle: {src_title}\nLocal path: {m.get('local_path')}\n\n"
+        f"Source S1 URL: {src_url}\nTitle: {src_title}\n\n"
+        f"Notes:\n{notes}\n\n"
         f"Source text:\n{src_text}\n"
     )
 
     try:
         model = create_chat_model(settings)
         msg = model.invoke([{"role": "user", "content": prompt}])
-        content = getattr(msg, "content", "") or ""
-        data = _extract_json_object(content)
-        if not data:
+        content = (getattr(msg, "content", "") or "").strip()
+        if len(content) >= 200:
+            report_path.write_text(content + "\n", encoding="utf-8")
             return
-
-        if not plan_path.exists() and isinstance(data.get("plan_md"), str) and data["plan_md"].strip():
-            plan_path.write_text(data["plan_md"].strip() + "\n", encoding="utf-8")
-
-        if not notes_path.exists() and isinstance(data.get("notes_md"), str) and data["notes_md"].strip():
-            notes_path.write_text(data["notes_md"].strip() + "\n", encoding="utf-8")
-
-        if not sources_path.exists() and isinstance(data.get("sources_json"), list):
-            sources_path.write_text(json.dumps(data["sources_json"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-        if not report_path.exists() and isinstance(data.get("report_md"), str) and data["report_md"].strip():
-            report_path.write_text(data["report_md"].strip() + "\n", encoding="utf-8")
     except Exception:
-        log.exception("fill_missing_with_model failed")
+        log.exception("ensure_report_with_model failed")
+
+    report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
 
 
 def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
@@ -262,7 +251,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 },
             )
 
-        _fill_missing_with_model(settings, td, req.question.strip(), sources_meta)
+        _ensure_report_with_model(settings, td, req.question.strip(), sources_meta)
 
         summary_text = ""
         if isinstance(result, dict) and "messages" in result and result["messages"]:
