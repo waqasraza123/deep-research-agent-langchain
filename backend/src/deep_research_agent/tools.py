@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Optional
@@ -19,39 +20,69 @@ class _TextAndLinksParser(HTMLParser):
         self.links: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        t = tag.lower()
+        t = (tag or "").lower()
         if t == "script":
             self._in_script = True
             return
         if t == "style":
             self._in_style = True
             return
+        if t in {"p", "br", "div", "section", "article", "main", "li", "ul", "ol"} or t.startswith("h"):
+            self.text_parts.append("\n")
         if t == "a":
             for k, v in attrs:
-                if k.lower() == "href" and v:
+                if (k or "").lower() == "href" and v:
                     self.links.append(v)
 
     def handle_endtag(self, tag):
-        t = tag.lower()
+        t = (tag or "").lower()
         if t == "script":
             self._in_script = False
         elif t == "style":
             self._in_style = False
+        elif t in {"p", "li"} or t.startswith("h"):
+            self.text_parts.append("\n")
 
     def handle_data(self, data):
         if self._in_script or self._in_style:
             return
-        s = data.strip()
+        s = (data or "").strip()
         if s:
             self.text_parts.append(s)
 
 
+def _normalize_text(text: str) -> str:
+    t = re.sub(r"[ \t]{2,}", " ", text)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _strip_noncontent_blocks(html: str) -> str:
+    t = html
+    for tag in ("nav", "header", "footer", "aside"):
+        t = re.sub(
+            rf"<{tag}\b[^>]*>.*?</{tag}>",
+            "",
+            t,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    return t
+
+
+def _select_content_html(html: str) -> str:
+    h = _strip_noncontent_blocks(html)
+    for tag in ("main", "article", "body"):
+        m = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", h, flags=re.IGNORECASE | re.DOTALL)
+        if m and m.group(1):
+            return m.group(1)
+    return h
+
+
 def html_to_text(html: str) -> str:
+    content_html = _select_content_html(html)
     parser = _TextAndLinksParser()
-    parser.feed(html)
-    text = "\n".join(parser.text_parts)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text
+    parser.feed(content_html)
+    return _normalize_text("\n".join(parser.text_parts))
 
 
 def extract_links(html: str, base_url: str, *, limit: int = 50) -> list[str]:
@@ -88,8 +119,19 @@ def extract_title(html: str) -> str | None:
     return t or None
 
 
-def _is_blocked_host(host: str) -> bool:
-    h = host.strip().lower()
+def _is_ip_blocked(ip: ipaddress._BaseAddress) -> bool:
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _host_is_blocked(host: str) -> bool:
+    h = (host or "").strip().lower()
     if not h:
         return True
     if h in {"localhost"}:
@@ -98,16 +140,22 @@ def _is_blocked_host(host: str) -> bool:
         return True
     try:
         ip = ipaddress.ip_address(h)
-        return bool(
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        )
+        return _is_ip_blocked(ip)
+    except Exception:
+        pass
+    try:
+        infos = socket.getaddrinfo(h, None)
+        ips = {info[4][0] for info in infos if info and info[4] and info[4][0]}
+        for ip_str in ips:
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                if _is_ip_blocked(ip):
+                    return True
+            except Exception:
+                continue
     except Exception:
         return False
+    return False
 
 
 def _validate_url(url: str) -> str:
@@ -118,7 +166,7 @@ def _validate_url(url: str) -> str:
         raise ValueError("userinfo not allowed")
     if not p.hostname:
         raise ValueError("missing host")
-    if _is_blocked_host(p.hostname):
+    if _host_is_blocked(p.hostname):
         raise ValueError("blocked host")
     return url
 
@@ -153,7 +201,9 @@ def _fetch_raw(url: str, *, timeout_s: float, max_bytes: int) -> tuple[str, str,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
     }
-    with httpx.Client(timeout=timeout_s, follow_redirects=True, headers=headers) as client:
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    transport = httpx.HTTPTransport(retries=0)
+    with httpx.Client(timeout=timeout_s, follow_redirects=True, headers=headers, limits=limits, transport=transport) as client:
         with client.stream("GET", url) as r:
             status = int(r.status_code)
             final_url = str(r.url)
@@ -186,11 +236,28 @@ def fetch_document(
 ) -> FetchResult:
     url = _validate_url(url)
 
-    raw, final_url, status, ctype, truncated_raw = _fetch_raw(
-        url,
-        timeout_s=timeout_s,
-        max_bytes=2_000_000,
-    )
+    max_bytes = min(5_000_000, max(64_000, max_chars * 4))
+    raw, final_url, status, ctype, truncated_raw = _fetch_raw(url, timeout_s=timeout_s, max_bytes=max_bytes)
+
+    _validate_url(final_url)
+
+    if status < 200 or status >= 300:
+        text = f"Fetch failed with status {status}\nURL: {final_url}\n"
+        wc = _word_count(text)
+        cc = len(text.strip())
+        return FetchResult(
+            ok=False,
+            url=url,
+            final_url=final_url,
+            status_code=status,
+            content_type=ctype,
+            extracted_text=text,
+            title=None,
+            truncated=False,
+            strategy="direct",
+            word_count=wc,
+            char_count=cc,
+        )
 
     title = extract_title(raw) if "html" in ctype else None
     extracted = raw
@@ -199,22 +266,19 @@ def fetch_document(
     if "html" in ctype:
         extracted = html_to_text(raw)
 
+    extracted = _normalize_text(extracted)
     wc = _word_count(extracted)
-    cc = len(extracted.strip())
+    cc = len(extracted)
 
     if (("html" in ctype) and (wc < min_words or cc < min_chars)) or cc == 0:
         jr = _jina_reader_url(final_url or url)
         try:
-            raw2, final_url2, status2, ctype2, truncated2 = _fetch_raw(
-                jr,
-                timeout_s=timeout_s,
-                max_bytes=2_000_000,
-            )
-            extracted2 = raw2.strip()
-            wc2 = _word_count(extracted2)
-            cc2 = len(extracted2)
-            if wc2 >= min_words and cc2 >= min_chars:
-                extracted = extracted2
+            raw2, final_url2, status2, ctype2, truncated2 = _fetch_raw(jr, timeout_s=timeout_s, max_bytes=max_bytes)
+            text2 = _normalize_text(raw2)
+            wc2 = _word_count(text2)
+            cc2 = len(text2)
+            if status2 >= 200 and status2 < 300 and wc2 >= min_words and cc2 >= min_chars:
+                extracted = text2
                 wc = wc2
                 cc = cc2
                 final_url = final_url2
@@ -229,13 +293,6 @@ def fetch_document(
     if len(extracted) > max_chars:
         extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
         truncated = True
-
-    if not ctype.startswith("text/") and "html" not in ctype:
-        extracted = f"Unsupported content-type: {ctype}\nURL: {final_url}\nStatus: {status}\n"
-        wc = _word_count(extracted)
-        cc = len(extracted.strip())
-        strategy = "direct"
-        truncated = False
 
     return FetchResult(
         ok=True,

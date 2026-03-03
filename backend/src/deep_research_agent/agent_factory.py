@@ -85,8 +85,9 @@ class AgentService:
             if meta_path.exists() and txt_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    size_ok = int(txt_path.stat().st_size) >= 1200
-                    if meta.get("ok") is True and size_ok:
+                    wc = int(meta.get("word_count") or 0)
+                    cc = int(meta.get("char_count") or 0)
+                    if meta.get("ok") is True and wc >= 160 and cc >= 1200:
                         seen_urls.add(url)
                         return json.dumps(meta, ensure_ascii=False)
                 except Exception:
@@ -106,7 +107,7 @@ class AgentService:
             txt_path.write_text(fr.extracted_text, encoding="utf-8")
 
             meta: dict[str, Any] = {
-                "ok": True,
+                "ok": fr.ok,
                 "url": fr.url,
                 "final_url": fr.final_url,
                 "title": fr.title,
