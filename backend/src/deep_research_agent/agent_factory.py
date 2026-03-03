@@ -7,14 +7,13 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .model import create_chat_model
 from .settings import Settings
-from .tools import extract_links, extract_title, html_to_text
+from .tools import fetch_document
 
 
 @dataclass(frozen=True)
@@ -75,10 +74,7 @@ class AgentService:
             return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
         def fetch_and_store(url: str) -> str:
-            """Fetch a URL, store text to runs/<thread_id>/sources, return compact JSON metadata."""
-            if not (url.startswith("http://") or url.startswith("https://")):
-                return json.dumps({"ok": False, "error": "only http(s) allowed", "url": url})
-
+            """Fetch a URL, store extracted text to runs/<thread_id>/sources, return compact JSON metadata."""
             if url not in seen_urls and len(seen_urls) >= limits.max_sources:
                 return json.dumps({"ok": False, "error": "source limit reached", "url": url})
 
@@ -87,56 +83,46 @@ class AgentService:
             meta_path = sources_dir / f"{url_hash}.json"
 
             if meta_path.exists() and txt_path.exists():
-                seen_urls.add(url)
                 try:
-                    return meta_path.read_text(encoding="utf-8")
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    size_ok = int(txt_path.stat().st_size) >= 400
+                    if meta.get("ok") is True and size_ok:
+                        seen_urls.add(url)
+                        return json.dumps(meta, ensure_ascii=False)
                 except Exception:
                     pass
 
             try:
-                with httpx.Client(timeout=self.settings.http_timeout_s, follow_redirects=True) as client:
-                    r = client.get(url, headers={"User-Agent": "deep-research-agent/0.1"})
-                    status = int(r.status_code)
-                    final_url = str(r.url)
-                    ctype = (r.headers.get("content-type") or "").lower()
-                    raw = r.text or ""
+                fr = fetch_document(
+                    url,
+                    timeout_s=self.settings.http_timeout_s,
+                    max_chars=self.settings.max_page_chars,
+                    follow_links=limits.follow_links,
+                    links_limit=limits.max_links_per_source,
+                    min_extracted_chars=400,
+                )
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}", "url": url})
 
-            truncated = False
-            if len(raw) > self.settings.max_page_chars:
-                raw = raw[: self.settings.max_page_chars] + "\n\n[TRUNCATED]\n"
-                truncated = True
-
-            title = extract_title(raw) if "html" in ctype else None
-
-            links: list[str] = []
-            text: str = raw
-
-            if "html" in ctype:
-                text = html_to_text(raw)
-                if limits.follow_links:
-                    links = extract_links(raw, final_url, limit=limits.max_links_per_source)
-
-            if not ctype.startswith("text/") and "html" not in ctype:
-                text = f"Unsupported content-type: {ctype}\nURL: {final_url}\nStatus: {status}\n"
-
+            text = fr.extracted_text
             txt_path.write_text(text, encoding="utf-8")
 
             meta: dict[str, Any] = {
                 "ok": True,
-                "url": url,
-                "final_url": final_url,
-                "title": title,
-                "content_type": ctype,
-                "status_code": status,
-                "truncated": truncated,
+                "url": fr.url,
+                "final_url": fr.final_url,
+                "title": fr.title,
+                "content_type": fr.content_type,
+                "status_code": fr.status_code,
+                "truncated": fr.truncated,
                 "fetched_at": _now_iso_utc(),
                 "local_path": f"runs/{thread_id}/sources/{url_hash}.txt",
+                "strategy": fr.strategy,
+                "text_chars": len(text),
             }
 
             if limits.follow_links:
-                meta["links"] = links
+                meta["links"] = fr.links
 
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             seen_urls.add(url)
