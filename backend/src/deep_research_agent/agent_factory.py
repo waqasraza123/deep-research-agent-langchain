@@ -131,7 +131,7 @@ class AgentService:
 - report.md
 
 Rules:
-- Use only information from fetched sources. Do not use general knowledge.
+- Use only information from fetched sources.
 - For each provided URL, call fetch_and_store(url).
 - notes.md must include source_id labels S1, S2...
 - sources.json must be valid JSON.

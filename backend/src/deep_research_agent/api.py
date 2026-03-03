@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -11,8 +12,10 @@ from pydantic import BaseModel, Field
 
 from .agent_factory import AgentService
 from .artifacts import artifact_abs_path, ensure_required_artifacts, ensure_thread_dir, list_artifacts
+from .model import create_chat_model
 from .logging_config import configure_logging
 from .settings import Settings
+from .tools import fetch_document
 
 
 log = logging.getLogger("deep_research_agent.api")
@@ -28,28 +31,133 @@ class RunRequest(BaseModel):
     follow_links: bool = False
 
 
-def _ensure_report(td, sources_json_path, notes_path, report_path):
-    if report_path.exists():
-        return
-    source_ids = []
-    if sources_json_path.exists():
+def _sha1(s: str) -> str:
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+
+
+def _prefetch_sources(settings: Settings, td, thread_id: str, urls: list[str]) -> list[dict[str, Any]]:
+    sources_dir = (td / "sources").resolve()
+    sources_dir.mkdir(parents=True, exist_ok=True)
+
+    out: list[dict[str, Any]] = []
+    for u in urls:
+        h = _sha1(u)
+        txt_path = sources_dir / f"{h}.txt"
+        meta_path = sources_dir / f"{h}.json"
+
+        need = True
+        if txt_path.exists() and meta_path.exists():
+            try:
+                size_ok = int(txt_path.stat().st_size) >= 1200
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if size_ok and meta.get("ok") is True:
+                    need = False
+            except Exception:
+                need = True
+
+        if need:
+            fr = fetch_document(
+                u,
+                timeout_s=settings.http_timeout_s,
+                max_chars=settings.max_page_chars,
+                min_words=160,
+                min_chars=1200,
+            )
+            txt_path.write_text(fr.extracted_text, encoding="utf-8")
+            meta = {
+                "ok": True,
+                "url": fr.url,
+                "final_url": fr.final_url,
+                "title": fr.title,
+                "content_type": fr.content_type,
+                "status_code": fr.status_code,
+                "truncated": fr.truncated,
+                "local_path": f"runs/{thread_id}/sources/{h}.txt",
+                "strategy": fr.strategy,
+                "word_count": fr.word_count,
+                "char_count": fr.char_count,
+            }
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
         try:
-            data = json.loads(sources_json_path.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                source_ids = [x.get("source_id") for x in data if isinstance(x, dict) and x.get("source_id")]
+            out.append(json.loads(meta_path.read_text(encoding="utf-8")))
         except Exception:
-            pass
-    sid = source_ids[0] if source_ids else "S1"
-    notes_text = ""
-    if notes_path.exists():
-        notes_text = notes_path.read_text(encoding="utf-8").strip()
-    body = "# Report\n\n"
-    if notes_text:
-        body += notes_text + "\n\n"
-    else:
-        body += "Insufficient extracted content to produce a grounded report.\n\n"
-    body += f"Conclusion: This output is grounded only in available sources. [{sid}]\n"
-    report_path.write_text(body, encoding="utf-8")
+            out.append({"ok": False, "url": u, "local_path": f"runs/{thread_id}/sources/{h}.txt"})
+    return out
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    s = text.strip()
+    if not s:
+        return None
+    start = s.find("{")
+    end = s.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(s[start : end + 1])
+    except Exception:
+        return None
+
+
+def _fill_missing_with_model(settings: Settings, td, question: str, sources_meta: list[dict[str, Any]]) -> None:
+    plan_path = td / "plan.md"
+    notes_path = td / "notes.md"
+    sources_path = td / "sources.json"
+    report_path = td / "report.md"
+
+    missing = [p for p in (plan_path, notes_path, sources_path, report_path) if not p.exists()]
+    if not missing:
+        return
+
+    sources_text_blocks: list[str] = []
+    for i, m in enumerate(sources_meta, start=1):
+        lp = m.get("local_path")
+        if not isinstance(lp, str):
+            continue
+        local_rel = lp.split("runs/", 1)[-1]
+        local_fs = (settings.runs_dir / local_rel).resolve()
+        if not local_fs.exists():
+            continue
+        text = local_fs.read_text(encoding="utf-8", errors="ignore")
+        text = text.strip()
+        if not text:
+            continue
+        if len(text) > 12000:
+            text = text[:12000] + "\n\n[TRUNCATED]\n"
+        sources_text_blocks.append(f"S{i} URL: {m.get('final_url') or m.get('url')}\n{text}")
+
+    context = "\n\n".join(sources_text_blocks).strip()
+    if not context:
+        return
+
+    prompt = (
+        "Using only the source text below, produce strict JSON with keys:\n"
+        "plan_md (string), notes_md (string), sources_json (array), report_md (string).\n"
+        "sources_json items must include: source_id, url, title, local_path.\n"
+        "report_md must cite like [S1]. Do not use outside knowledge.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Sources:\n{context}\n"
+    )
+
+    model = create_chat_model(settings)
+    msg = model.invoke([{"role": "user", "content": prompt}])
+    content = getattr(msg, "content", "") or ""
+    data = _extract_json_object(content)
+    if not isinstance(data, dict):
+        return
+
+    if not plan_path.exists() and isinstance(data.get("plan_md"), str) and data["plan_md"].strip():
+        plan_path.write_text(data["plan_md"].strip() + "\n", encoding="utf-8")
+
+    if not notes_path.exists() and isinstance(data.get("notes_md"), str) and data["notes_md"].strip():
+        notes_path.write_text(data["notes_md"].strip() + "\n", encoding="utf-8")
+
+    if not sources_path.exists() and isinstance(data.get("sources_json"), list):
+        sources_path.write_text(json.dumps(data["sources_json"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    if not report_path.exists() and isinstance(data.get("report_md"), str) and data["report_md"].strip():
+        report_path.write_text(data["report_md"].strip() + "\n", encoding="utf-8")
 
 
 def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
@@ -70,6 +178,8 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
         urls = [u.strip() for u in req.urls if u and u.strip()]
         urls = urls[: max(0, min(req.max_sources, 3))] if urls else []
+
+        sources_meta = _prefetch_sources(settings, td, thread_id, urls)
 
         user_msg = req.question.strip()
         if urls:
@@ -99,27 +209,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 },
             )
 
-        missing = []
-        for name in ("plan.md", "notes.md", "sources.json", "report.md"):
-            if not (td / name).exists():
-                missing.append(name)
-
-        if missing:
-            repair = "Create missing files in /runs/{tid}:\n{files}\nUse provided URLs only.\nEnd after files exist.".format(
-                tid=thread_id,
-                files="\n".join(f"- {n}" for n in missing),
-            )
-            if urls:
-                repair += "\nURLs:\n" + "\n".join(f"- {u}" for u in urls)
-            try:
-                agent.invoke(
-                    {"messages": [{"role": "user", "content": repair}]},
-                    config={"configurable": {"thread_id": thread_id}},
-                )
-            except Exception:
-                log.exception("repair invoke failed")
-
-        _ensure_report(td, td / "sources.json", td / "notes.md", td / "report.md")
+        _fill_missing_with_model(settings, td, req.question.strip(), sources_meta)
 
         summary_text = None
         if isinstance(result, dict) and "messages" in result and result["messages"]:
@@ -133,7 +223,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
         return {
             "thread_id": thread_id,
-            "summary": summary_text,
+            "summary": summary_text or "",
             "warnings": warnings,
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
             "hint": f"Report should be at runs/{thread_id}/report.md",

@@ -147,12 +147,7 @@ class FetchResult:
     char_count: int
 
 
-def _fetch_raw(
-    url: str,
-    *,
-    timeout_s: float,
-    max_bytes: int,
-) -> tuple[str, str, int, str, bool]:
+def _fetch_raw(url: str, *, timeout_s: float, max_bytes: int) -> tuple[str, str, int, str, bool]:
     headers = {
         "User-Agent": "deep-research-agent/0.1",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
