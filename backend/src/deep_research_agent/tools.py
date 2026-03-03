@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Optional
-from urllib.parse import urljoin, urldefrag, urlparse, urlunparse
+from urllib.parse import quote, urljoin, urldefrag, urlparse
 
 import httpx
 
@@ -123,13 +123,13 @@ def _validate_url(url: str) -> str:
     return url
 
 
-def _to_jina(url: str) -> str:
-    p = urlparse(url)
-    host = p.hostname or ""
-    path = p.path or ""
-    query = f"?{p.query}" if p.query else ""
-    target = f"http://{host}{path}{query}"
-    return f"https://r.jina.ai/{target}"
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", text))
+
+
+def _jina_reader_url(url: str) -> str:
+    encoded = quote(url, safe=":/?&=%#@+;,")
+    return f"https://r.jina.ai/{encoded}"
 
 
 @dataclass(frozen=True)
@@ -139,21 +139,25 @@ class FetchResult:
     final_url: str
     status_code: int
     content_type: str
-    raw: str
     extracted_text: str
     title: Optional[str]
-    links: list[str]
     truncated: bool
     strategy: str
+    word_count: int
+    char_count: int
 
 
-def _fetch_raw_text(url: str, *, timeout_s: float, max_chars: int) -> tuple[str, str, int, str, bool]:
+def _fetch_raw(
+    url: str,
+    *,
+    timeout_s: float,
+    max_bytes: int,
+) -> tuple[str, str, int, str, bool]:
     headers = {
         "User-Agent": "deep-research-agent/0.1",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
     }
-    max_bytes = max(4096, min(max_chars * 4, 2_000_000))
     with httpx.Client(timeout=timeout_s, follow_redirects=True, headers=headers) as client:
         with client.stream("GET", url) as r:
             status = int(r.status_code)
@@ -182,43 +186,61 @@ def fetch_document(
     *,
     timeout_s: float = 25.0,
     max_chars: int = 250_000,
-    follow_links: bool = False,
-    links_limit: int = 0,
-    min_extracted_chars: int = 400,
+    min_words: int = 160,
+    min_chars: int = 1200,
 ) -> FetchResult:
     url = _validate_url(url)
 
-    raw, final_url, status, ctype, truncated = _fetch_raw_text(url, timeout_s=timeout_s, max_chars=max_chars)
-    title = extract_title(raw) if "html" in ctype else None
+    raw, final_url, status, ctype, truncated_raw = _fetch_raw(
+        url,
+        timeout_s=timeout_s,
+        max_bytes=2_000_000,
+    )
 
+    title = extract_title(raw) if "html" in ctype else None
     extracted = raw
-    links: list[str] = []
+    strategy = "direct"
+
     if "html" in ctype:
         extracted = html_to_text(raw)
-        if follow_links and links_limit > 0:
-            links = extract_links(raw, final_url, limit=links_limit)
 
-    strategy = "direct"
-    if ("html" in ctype) and (len(extracted.strip()) < min_extracted_chars) and ("r.jina.ai" not in url):
-        jina_url = _to_jina(final_url or url)
+    wc = _word_count(extracted)
+    cc = len(extracted.strip())
+
+    if (("html" in ctype) and (wc < min_words or cc < min_chars)) or cc == 0:
+        jr = _jina_reader_url(final_url or url)
         try:
-            raw2, final_url2, status2, ctype2, truncated2 = _fetch_raw_text(
-                jina_url, timeout_s=timeout_s, max_chars=max_chars
+            raw2, final_url2, status2, ctype2, truncated2 = _fetch_raw(
+                jr,
+                timeout_s=timeout_s,
+                max_bytes=2_000_000,
             )
             extracted2 = raw2.strip()
-            if len(extracted2) >= min_extracted_chars:
-                raw, final_url, status, ctype, truncated = raw2, final_url2, status2, ctype2, truncated2
+            wc2 = _word_count(extracted2)
+            cc2 = len(extracted2)
+            if wc2 >= min_words and cc2 >= min_chars:
                 extracted = extracted2
-                title = title or None
-                links = []
+                wc = wc2
+                cc = cc2
+                final_url = final_url2
+                status = status2
+                ctype = ctype2
+                truncated_raw = truncated2
                 strategy = "jina"
         except Exception:
             pass
 
+    truncated = False
+    if len(extracted) > max_chars:
+        extracted = extracted[:max_chars] + "\n\n[TRUNCATED]\n"
+        truncated = True
+
     if not ctype.startswith("text/") and "html" not in ctype:
         extracted = f"Unsupported content-type: {ctype}\nURL: {final_url}\nStatus: {status}\n"
-        links = []
-        title = None
+        wc = _word_count(extracted)
+        cc = len(extracted.strip())
+        strategy = "direct"
+        truncated = False
 
     return FetchResult(
         ok=True,
@@ -226,21 +248,18 @@ def fetch_document(
         final_url=final_url,
         status_code=status,
         content_type=ctype,
-        raw=raw,
         extracted_text=extracted,
         title=title,
-        links=links,
-        truncated=truncated,
+        truncated=bool(truncated or truncated_raw),
         strategy=strategy,
+        word_count=wc,
+        char_count=cc,
     )
 
 
 def fetch_url(url: str, *, timeout_s: float = 25.0, max_chars: int = 250_000) -> str:
     try:
-        r = fetch_document(url, timeout_s=timeout_s, max_chars=max_chars, follow_links=False, links_limit=0)
-        text = r.extracted_text
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n\n[TRUNCATED]\n"
-        return text
+        fr = fetch_document(url, timeout_s=timeout_s, max_chars=max_chars)
+        return fr.extracted_text
     except Exception as e:
         return f"Fetch failed: {type(e).__name__}: {e}"

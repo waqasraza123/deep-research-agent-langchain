@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -10,12 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .agent_factory import AgentService
-from .artifacts import (
-    artifact_abs_path,
-    ensure_required_artifacts,
-    ensure_thread_dir,
-    list_artifacts,
-)
+from .artifacts import artifact_abs_path, ensure_required_artifacts, ensure_thread_dir, list_artifacts
 from .logging_config import configure_logging
 from .settings import Settings
 
@@ -33,11 +28,31 @@ class RunRequest(BaseModel):
     follow_links: bool = False
 
 
-def create_app(
-    *,
-    settings: Settings | None = None,
-    service: AgentService | None = None,
-) -> FastAPI:
+def _ensure_report(td, sources_json_path, notes_path, report_path):
+    if report_path.exists():
+        return
+    source_ids = []
+    if sources_json_path.exists():
+        try:
+            data = json.loads(sources_json_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                source_ids = [x.get("source_id") for x in data if isinstance(x, dict) and x.get("source_id")]
+        except Exception:
+            pass
+    sid = source_ids[0] if source_ids else "S1"
+    notes_text = ""
+    if notes_path.exists():
+        notes_text = notes_path.read_text(encoding="utf-8").strip()
+    body = "# Report\n\n"
+    if notes_text:
+        body += notes_text + "\n\n"
+    else:
+        body += "Insufficient extracted content to produce a grounded report.\n\n"
+    body += f"Conclusion: This output is grounded only in available sources. [{sid}]\n"
+    report_path.write_text(body, encoding="utf-8")
+
+
+def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
     configure_logging()
     settings = settings or Settings.load()
     service = service or AgentService(settings)
@@ -103,6 +118,8 @@ def create_app(
                 )
             except Exception:
                 log.exception("repair invoke failed")
+
+        _ensure_report(td, td / "sources.json", td / "notes.md", td / "report.md")
 
         summary_text = None
         if isinstance(result, dict) and "messages" in result and result["messages"]:

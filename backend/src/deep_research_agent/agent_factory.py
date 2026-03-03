@@ -85,7 +85,7 @@ class AgentService:
             if meta_path.exists() and txt_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    size_ok = int(txt_path.stat().st_size) >= 400
+                    size_ok = int(txt_path.stat().st_size) >= 1200
                     if meta.get("ok") is True and size_ok:
                         seen_urls.add(url)
                         return json.dumps(meta, ensure_ascii=False)
@@ -97,15 +97,13 @@ class AgentService:
                     url,
                     timeout_s=self.settings.http_timeout_s,
                     max_chars=self.settings.max_page_chars,
-                    follow_links=limits.follow_links,
-                    links_limit=limits.max_links_per_source,
-                    min_extracted_chars=400,
+                    min_words=160,
+                    min_chars=1200,
                 )
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}", "url": url})
 
-            text = fr.extracted_text
-            txt_path.write_text(text, encoding="utf-8")
+            txt_path.write_text(fr.extracted_text, encoding="utf-8")
 
             meta: dict[str, Any] = {
                 "ok": True,
@@ -118,11 +116,9 @@ class AgentService:
                 "fetched_at": _now_iso_utc(),
                 "local_path": f"runs/{thread_id}/sources/{url_hash}.txt",
                 "strategy": fr.strategy,
-                "text_chars": len(text),
+                "word_count": fr.word_count,
+                "char_count": fr.char_count,
             }
-
-            if limits.follow_links:
-                meta["links"] = fr.links
 
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             seen_urls.add(url)
@@ -135,10 +131,12 @@ class AgentService:
 - report.md
 
 Rules:
+- Use only information from fetched sources. Do not use general knowledge.
 - For each provided URL, call fetch_and_store(url).
 - notes.md must include source_id labels S1, S2...
 - sources.json must be valid JSON.
 - report.md must cite sources like [S1].
+- If sources are insufficient, write report.md explaining that and cite [S1].
 
 Output only after all files are written."""
 
