@@ -123,8 +123,8 @@ def extraction_attempts_from_fetch_result(
 ) -> list[LinkExtractionAttempt]:
     base_url = result.canonical_url or result.final_url or result.url
     if result.kind == "md":
-        out: list[LinkExtractionAttempt] = []
-        seen: set[str] = set()
+        markdown_out: list[LinkExtractionAttempt] = []
+        markdown_seen: set[str] = set()
         for match in re.finditer(r"\[([^\]]{1,200})\]\(([^)\s]+)\)", result.extracted_text or ""):
             candidate, reason = link_candidate(
                 match.group(2),
@@ -133,12 +133,12 @@ def extraction_attempts_from_fetch_result(
                 anchor_text=match.group(1),
                 source_format="markdown",
             )
-            if candidate is not None and candidate.normalized_url in seen:
+            if candidate is not None and candidate.normalized_url in markdown_seen:
                 reason = "duplicate_extracted_link"
                 candidate = None
             if candidate is not None:
-                seen.add(candidate.normalized_url)
-            out.append(
+                markdown_seen.add(candidate.normalized_url)
+            markdown_out.append(
                 LinkExtractionAttempt(
                     href=match.group(2),
                     anchor_text=match.group(1),
@@ -146,7 +146,7 @@ def extraction_attempts_from_fetch_result(
                     skip_reason=reason,
                 )
             )
-        return out
+        return markdown_out
     if result.kind != "html":
         return []
 

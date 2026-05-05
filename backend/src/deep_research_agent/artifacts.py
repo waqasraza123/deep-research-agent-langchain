@@ -112,7 +112,7 @@ def _strategy_subquestions_payload(strategy: "ResearchStrategy") -> list[dict[st
     out: list[dict[str, Any]] = []
     for sq in strategy.subquestions:
         if hasattr(sq, "model_dump"):
-            out.append(sq.model_dump(mode="json"))  # type: ignore[attr-defined]
+            out.append(sq.model_dump(mode="json"))
         else:
             out.append(sq.dict())
     return out

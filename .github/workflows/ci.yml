@@ -25,12 +25,15 @@ jobs:
 
       - name: Lint
         run: |
-          ruff check backend
+          cd backend
+          ruff check .
 
       - name: Typecheck
         run: |
-          mypy backend/src
+          cd backend
+          mypy src
 
       - name: Tests
         run: |
+          cd backend
           pytest -q

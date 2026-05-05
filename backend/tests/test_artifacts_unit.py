@@ -1,9 +1,10 @@
-import pytest
 from pathlib import Path
 
+import pytest
+
 from deep_research_agent.artifacts import (
-    ensure_thread_dir,
     artifact_abs_path,
+    ensure_thread_dir,
     safe_thread_id,
 )
 

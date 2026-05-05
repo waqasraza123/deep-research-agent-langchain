@@ -45,8 +45,8 @@ from .runtime.model_registry import build_model_registry
 from .runtime.retries import retry_sync
 from .runtime.run_context import RunContext
 from .settings import Settings
-from .source_intelligence import CrawlResult, SourceRecord, crawl_sources
-from .source_intelligence.source_graph import write_sources_manifest
+from .source_intelligence import CrawlBudgetStats, CrawlResult, SourceRecord, crawl_sources
+from .source_intelligence.source_graph import write_source_graph_artifacts, write_sources_manifest
 
 log = logging.getLogger("deep_research_agent.api")
 
@@ -56,11 +56,11 @@ class RunRequest(BaseModel):
     urls: list[str] = []
     thread_id: str | None = None
     generate_strategy: bool = True
-    require_review: bool = False
+    require_review: bool | None = None
 
     max_sources: int = Field(default=1, ge=0, le=3)
-    max_links_per_source: int = Field(default=0, ge=0, le=10)
-    follow_links: bool = False
+    max_links_per_source: int | None = Field(default=None, ge=0, le=10)
+    follow_links: bool | None = None
     mock_mode: bool = False
     allow_mock_fallback: bool = False
     budget: RunBudget | None = None
@@ -331,6 +331,51 @@ def _advance_to_building_evidence(
         lifecycle.transition(status)
 
 
+def _write_mock_source_artifacts(
+    *,
+    thread_dir,
+    thread_id: str,
+    urls: list[str],
+) -> CrawlResult:
+    result = CrawlResult(root_urls=urls)
+    result.budget = CrawlBudgetStats(
+        root_count=len(urls),
+        global_link_budget=0,
+        max_links_per_source=0,
+        max_depth=0,
+    )
+    result.sources = [
+        SourceRecord(
+            url=url,
+            normalized_url=url,
+            source_kind="root",
+            ok=False,
+            skipped=True,
+            skip_reason="mock_mode_not_fetched",
+            title="Mock source placeholder",
+            source_id=f"S{idx}",
+        )
+        for idx, url in enumerate(urls, start=1)
+    ]
+    if not result.sources:
+        result.sources = [
+            SourceRecord(
+                url="mock://no-source-provided",
+                normalized_url="mock://no-source-provided",
+                source_kind="root",
+                ok=False,
+                skipped=True,
+                skip_reason="no_source_provided",
+                title="No source provided",
+                source_id="S1",
+            )
+        ]
+    result.budget.skipped_count = len(result.sources)
+    write_source_graph_artifacts(thread_dir, result)
+    write_sources_manifest(thread_dir / "sources.json", result.sources)
+    return result
+
+
 def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
     configure_logging()
     settings = settings or Settings.load()
@@ -376,6 +421,22 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
         urls = [u.strip() for u in req.urls if u and u.strip()]
         urls = urls[: max(0, min(req.max_sources, 3))] if urls else []
+        follow_links = (
+            effective_settings.default_follow_links
+            if req.follow_links is None
+            else bool(req.follow_links)
+        )
+        max_links_per_source = (
+            effective_settings.default_max_links_per_source
+            if req.max_links_per_source is None
+            else int(req.max_links_per_source)
+        )
+        max_links_per_source = max(0, min(max_links_per_source, 10))
+        require_review = (
+            effective_settings.review_gate_default
+            if req.require_review is None
+            else bool(req.require_review)
+        )
         run_repository.create(
             thread_id=thread_id,
             question=req.question.strip(),
@@ -383,13 +444,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             settings_snapshot={
                 **settings_snapshot_from_object(effective_settings),
                 "max_sources": max(0, min(req.max_sources, 3)),
-                "max_links_per_source": max(0, min(req.max_links_per_source, 10)),
-                "follow_links": bool(req.follow_links),
+                "max_links_per_source": max_links_per_source,
+                "follow_links": follow_links,
                 "generate_strategy": bool(req.generate_strategy),
-                "require_review": bool(req.require_review),
+                "require_review": require_review,
                 "mock_mode": effective_settings.model_provider == "mock",
             },
-            require_review=bool(req.require_review),
+            require_review=require_review,
         )
         lifecycle = RunLifecycle(run_repository, thread_id)
 
@@ -422,10 +483,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     question=req.question.strip(),
                     sources_meta=sources_meta,
                 )
+                _write_mock_source_artifacts(thread_dir=td, thread_id=thread_id, urls=urls)
                 for rel_path in (
                     "plan.md",
                     "notes.md",
                     "sources.json",
+                    "source_graph.json",
+                    "source_graph.md",
                     "report.md",
                     "metadata.json",
                 ):
@@ -437,6 +501,25 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 lifecycle.transition(RunStatus.ANALYZING)
                 lifecycle.transition(RunStatus.WRITING_REPORT)
                 lifecycle.transition(RunStatus.BUILDING_EVIDENCE)
+                ledger = rebuild_evidence_artifacts(td, thread_id=thread_id)
+                for rel_path in (
+                    "evidence_ledger.json",
+                    "evidence_ledger.md",
+                    "unsupported_claims.md",
+                    "contradictions.md",
+                    "citation_map.json",
+                    "evidence_coverage.json",
+                ):
+                    path = td / rel_path
+                    run_context.artifact_written(
+                        rel_path,
+                        path.stat().st_size if path.exists() else None,
+                    )
+                run_context.log(
+                    "artifact_written",
+                    message="evidence_coverage",
+                    metadata={"total_claims": ledger.coverage.total_claims},
+                )
                 run_context.budget_warning()
                 run_context.log("run_completed", message="mock run completed", metadata=metadata)
                 run_repository.refresh_artifacts(thread_id)
@@ -445,7 +528,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     budget_summary=read_budget_file(td / "budget.json"),
                 )
                 lifecycle.complete(
-                    require_review=bool(req.require_review),
+                    require_review=require_review,
                     summary="[MOCK OUTPUT] Deterministic offline run completed.",
                 )
                 return {
@@ -468,8 +551,8 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 thread_id,
                 urls,
                 question=req.question.strip(),
-                follow_links=bool(req.follow_links),
-                max_links_per_source=max(0, min(req.max_links_per_source, 10)),
+                follow_links=follow_links,
+                max_links_per_source=max_links_per_source,
                 run_context=run_context,
             )
             sources_meta = crawl_result.to_sources_json()
@@ -499,8 +582,8 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             agent = active_service.build_agent(
                 thread_id,
                 max_sources=max(0, min(req.max_sources, 3)),
-                max_links_per_source=max(0, min(req.max_links_per_source, 10)),
-                follow_links=bool(req.follow_links),
+                max_links_per_source=max_links_per_source,
+                follow_links=follow_links,
                 run_context=run_context,
             )
             model_name = (
@@ -577,7 +660,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     budget_summary=read_budget_file(td / "budget.json"),
                 )
                 lifecycle.complete(
-                    require_review=bool(req.require_review),
+                    require_review=require_review,
                     summary=("[MOCK OUTPUT] Explicit mock fallback completed after model failure."),
                 )
                 fallback_summary = (
@@ -633,7 +716,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         run_repository.set_output_summary(
             thread_id, budget_summary=read_budget_file(td / "budget.json")
         )
-        lifecycle.complete(require_review=bool(req.require_review), summary=summary_text)
+        lifecycle.complete(require_review=require_review, summary=summary_text)
 
         return {
             "thread_id": thread_id,
@@ -807,6 +890,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Budget not found")
         return data
 
+    @app.get("/runs/{thread_id}/artifacts")
+    def run_artifacts(thread_id: str) -> list[dict[str, Any]]:
+        return [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)]
+
+    @app.get("/runs/{thread_id}/artifacts/{rel_path:path}")
+    def run_artifact_download(thread_id: str, rel_path: str):
+        return _download_artifact(thread_id, rel_path)
+
     @app.post("/research-plan")
     def research_plan(req: PlanRequest) -> dict[str, Any]:
         urls = [u.strip() for u in req.urls if u and u.strip()]
@@ -835,6 +926,9 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.get("/threads/{thread_id}/artifacts/{rel_path:path}")
     def artifact_download(thread_id: str, rel_path: str):
+        return _download_artifact(thread_id, rel_path)
+
+    def _download_artifact(thread_id: str, rel_path: str):
         if rel_path in INTERNAL_FILES:
             raise HTTPException(status_code=404, detail="Not found")
         try:

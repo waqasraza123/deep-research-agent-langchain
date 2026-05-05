@@ -30,7 +30,8 @@ class AgentService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.settings.runs_dir.mkdir(parents=True, exist_ok=True)
-        db_path = self.settings.runs_dir / "checkpoints.sqlite"
+        db_path = self.settings.checkpoint_path or self.settings.runs_dir / "checkpoints.sqlite"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._checkpointer = SqliteSaver(conn)
 
@@ -94,12 +95,12 @@ class AgentService:
 
             if meta_path.exists() and txt_path.exists():
                 try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    wc = int(meta.get("word_count") or 0)
-                    cc = int(meta.get("char_count") or 0)
-                    if meta.get("ok") is True and wc >= 160 and cc >= 1200:
+                    cached_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    wc = int(cached_meta.get("word_count") or 0)
+                    cc = int(cached_meta.get("char_count") or 0)
+                    if cached_meta.get("ok") is True and wc >= 160 and cc >= 1200:
                         seen_urls.add(url)
-                        return json.dumps(meta, ensure_ascii=False)
+                        return json.dumps(cached_meta, ensure_ascii=False)
                 except Exception:
                     pass
 

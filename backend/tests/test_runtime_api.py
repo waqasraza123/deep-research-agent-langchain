@@ -38,6 +38,12 @@ def test_mock_mode_run_requires_no_credentials(client):
     assert report.status_code == 200
     assert "MOCK OUTPUT" in report.text
 
+    artifacts = client.get(f"/runs/{tid}/artifacts")
+    assert artifacts.status_code == 200
+    paths = {item["path"] for item in artifacts.json()}
+    assert "source_graph.json" in paths
+    assert "evidence_ledger.json" in paths
+
     events = client.get(f"/runs/{tid}/events")
     assert events.status_code == 200
     event_types = [event["event_type"] for event in events.json()]

@@ -1,4 +1,4 @@
-from deep_research_agent.tools import html_to_text, extract_links, extract_title
+from deep_research_agent.tools import extract_links, extract_title, html_to_text
 
 
 def test_extract_title():
@@ -36,4 +36,4 @@ def test_extract_links_normalizes_and_filters():
     links = extract_links(html, "https://example.com/base", limit=10)
     assert "https://example.com/a" in links
     assert "https://example.com/b" in links
-    assert all(not l.startswith("mailto:") for l in links)
+    assert all(not link.startswith("mailto:") for link in links)

@@ -27,6 +27,7 @@ from .state_machine import STATUS_TO_STAGE, validate_transition
 
 REGISTRY_FILE = ".run.json"
 CANCELLATION_FILE = ".cancel.json"
+PUBLIC_RUN_FILE = "run.json"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,10 @@ class RunRepository:
     def registry_path(self, thread_id: str) -> Path:
         safe_thread_id(thread_id)
         return self.runs_dir / thread_id / REGISTRY_FILE
+
+    def public_run_path(self, thread_id: str) -> Path:
+        safe_thread_id(thread_id)
+        return self.runs_dir / thread_id / PUBLIC_RUN_FILE
 
     def cancellation_path(self, thread_id: str) -> Path:
         safe_thread_id(thread_id)
@@ -111,12 +116,15 @@ class RunRepository:
             run.updated_at = utc_now()
         path = self.registry_path(run.thread_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(model_to_dict(run), ensure_ascii=False, indent=2, sort_keys=True)
         tmp_path = path.with_suffix(".json.tmp")
-        tmp_path.write_text(
-            json.dumps(model_to_dict(run), ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        tmp_path.write_text(payload, encoding="utf-8")
         tmp_path.replace(path)
+
+        public_path = self.public_run_path(run.thread_id)
+        public_tmp_path = public_path.with_suffix(".json.tmp")
+        public_tmp_path.write_text(payload + "\n", encoding="utf-8")
+        public_tmp_path.replace(public_path)
         return run
 
     def transition(self, thread_id: str, status: RunStatus) -> ResearchRun:
@@ -264,8 +272,13 @@ def settings_snapshot_from_object(settings: Any) -> dict[str, Any]:
         "openai_max_tokens",
         "openai_timeout_s",
         "openai_max_retries",
+        "checkpoint_path",
         "max_page_chars",
         "http_timeout_s",
+        "default_follow_links",
+        "default_max_links_per_source",
+        "evidence_citation_threshold",
+        "review_gate_default",
     )
     snapshot: dict[str, Any] = {}
     for key in keys:

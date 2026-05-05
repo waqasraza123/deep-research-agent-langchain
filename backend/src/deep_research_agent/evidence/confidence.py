@@ -4,7 +4,13 @@ import re
 
 from .citation_mapper import content_terms
 from .claim_extractor import extract_values
-from .contracts import ClaimConfidence, EvidenceSource, ExtractedClaim, UnsupportedClaim
+from .contracts import (
+    ClaimConfidence,
+    EvidenceSource,
+    ExtractedClaim,
+    SupportLevel,
+    UnsupportedClaim,
+)
 
 _STRONG_LANGUAGE_RE = re.compile(
     r"\b(always|never|proves|guarantees|undeniably|clearly|definitely|all|none|best|must)\b",
@@ -196,7 +202,7 @@ def _score_generated_claim(
     )
 
 
-def _support_level(score: float, has_citation: bool, contradicted: bool) -> str:
+def _support_level(score: float, has_citation: bool, contradicted: bool) -> SupportLevel:
     if contradicted:
         return "contradicted"
     if not has_citation:

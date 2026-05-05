@@ -87,7 +87,7 @@ class VerificationStep(BaseModel):
 
 def _model_to_dict(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
-        return model.model_dump(mode="json")  # type: ignore[attr-defined]
+        return model.model_dump(mode="json")
     return model.dict()
 
 
@@ -141,15 +141,17 @@ class ResearchStrategy(BaseModel):
             lines.append("")
 
         lines.extend(["## Evidence Requirements", ""])
-        for item in self.evidence_requirements:
+        for requirement in self.evidence_requirements:
             lines.append(
-                f"- P{item.priority} `{item.evidence_type.value}`: "
-                f"{item.description} (minimum sources: {item.minimum_sources})"
+                f"- P{requirement.priority} `{requirement.evidence_type.value}`: "
+                f"{requirement.description} (minimum sources: {requirement.minimum_sources})"
             )
 
         lines.extend(["", "## Source Priorities", ""])
-        for item in self.source_priorities:
-            lines.append(f"- P{item.priority} `{item.category.value}`: {item.rationale}")
+        for priority in self.source_priorities:
+            lines.append(
+                f"- P{priority.priority} `{priority.category.value}`: {priority.rationale}"
+            )
 
         lines.extend(["", "## Verification Plan", ""])
         for step in self.verification_plan:

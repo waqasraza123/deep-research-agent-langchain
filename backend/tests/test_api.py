@@ -16,6 +16,7 @@ def test_run_creates_required_artifacts(client):
     tid = body["thread_id"]
 
     paths = {a["path"] for a in body["artifacts"]}
+    assert "run.json" in paths
     assert "plan.md" in paths
     assert "notes.md" in paths
     assert "sources.json" in paths
@@ -34,14 +35,17 @@ def test_artifacts_list_and_download(client):
     r = client.post("/run", json={"question": "test question"})
     tid = r.json()["thread_id"]
 
-    lr = client.get(f"/threads/{tid}/artifacts")
+    lr = client.get(f"/runs/{tid}/artifacts")
     assert lr.status_code == 200
     items = lr.json()
     assert any(i["path"] == "report.md" for i in items)
 
-    dr = client.get(f"/threads/{tid}/artifacts/report.md")
+    dr = client.get(f"/runs/{tid}/artifacts/report.md")
     assert dr.status_code == 200
     assert "test report" in dr.text.lower()
+
+    legacy = client.get(f"/threads/{tid}/artifacts/report.md")
+    assert legacy.status_code == 200
 
 
 def test_artifact_path_traversal_blocked(client):
@@ -86,3 +90,28 @@ def test_research_plan_route_creates_strategy_artifacts(client):
     assert "strategy.md" in paths
     assert "subquestions.json" in paths
     assert "verification_plan.md" in paths
+
+
+def test_mock_run_writes_intelligent_artifacts_and_public_run_snapshot(client):
+    r = client.post(
+        "/run",
+        json={
+            "question": "Validate integrated mock backend artifacts",
+            "mock_mode": True,
+            "urls": ["https://example.invalid/root"],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    tid = body["thread_id"]
+    paths = {a["path"] for a in body["artifacts"]}
+
+    assert "run.json" in paths
+    assert "source_graph.json" in paths
+    assert "source_graph.md" in paths
+    assert "evidence_ledger.json" in paths
+    assert "evidence_coverage.json" in paths
+
+    run_snapshot = client.get(f"/runs/{tid}/artifacts/run.json")
+    assert run_snapshot.status_code == 200
+    assert run_snapshot.json()["thread_id"] == tid

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import ipaddress
 import io
+import ipaddress
 import re
 import socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Optional
-from urllib.parse import quote, urljoin, urldefrag, urlparse
+from urllib.parse import quote, urldefrag, urljoin, urlparse
 
 import httpx
 
@@ -30,7 +30,8 @@ class _TextAndLinksParser(HTMLParser):
         if t == "style":
             self._in_style = True
             return
-        if t in {"p", "br", "div", "section", "article", "main", "li", "ul", "ol"} or t.startswith("h"):
+        block_tags = {"p", "br", "div", "section", "article", "main", "li", "ul", "ol"}
+        if t in block_tags or t.startswith("h"):
             self.text_parts.append("\n")
         if t == "a":
             for k, v in attrs:
@@ -58,7 +59,9 @@ class _TextAndLinksParser(HTMLParser):
             self.text_parts.append(s)
             if self._active_link_index is not None:
                 current = self.link_records[self._active_link_index].get("anchor_text", "")
-                self.link_records[self._active_link_index]["anchor_text"] = (current + " " + s).strip()
+                self.link_records[self._active_link_index]["anchor_text"] = (
+                    current + " " + s
+                ).strip()
 
 
 def _normalize_text(text: str) -> str:
@@ -118,7 +121,12 @@ def extract_link_records(html: str, base_url: str, *, limit: int = 50) -> list[d
         if abs_url in seen:
             continue
         seen.add(abs_url)
-        out.append({"url": abs_url, "anchor_text": _normalize_text(record.get("anchor_text") or "")})
+        out.append(
+            {
+                "url": abs_url,
+                "anchor_text": _normalize_text(record.get("anchor_text") or ""),
+            }
+        )
 
         if len(out) >= limit:
             break
@@ -153,7 +161,7 @@ def extract_canonical_url(html: str, base_url: str) -> str | None:
     return canonical
 
 
-def _is_ip_blocked(ip: ipaddress._BaseAddress) -> bool:
+def _is_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return bool(
         ip.is_private
         or ip.is_loopback
@@ -221,7 +229,10 @@ def _detect_kind(url: str, content_type: str) -> str:
 
     if path.endswith(".pdf") or "application/pdf" in ct:
         return "pdf"
-    if path.endswith(".docx") or "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in ct:
+    if (
+        path.endswith(".docx")
+        or "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in ct
+    ):
         return "docx"
     if path.endswith(".txt") or ct.startswith("text/plain"):
         return "txt"
@@ -238,7 +249,7 @@ def _detect_kind(url: str, content_type: str) -> str:
 
 def _extract_pdf_text(data: bytes) -> tuple[bool, str]:
     try:
-        from pypdf import PdfReader  # type: ignore
+        from pypdf import PdfReader
     except Exception:
         return False, "PDF extraction requires pypdf. Install it to enable PDF support."
 
@@ -260,7 +271,7 @@ def _extract_pdf_text(data: bytes) -> tuple[bool, str]:
 
 def _extract_docx_text(data: bytes) -> tuple[bool, str]:
     try:
-        from docx import Document  # type: ignore
+        from docx import Document
     except Exception:
         return False, "DOCX extraction requires python-docx. Install it to enable DOCX support."
 
@@ -302,7 +313,12 @@ class FetchResult:
     extracted_links: tuple[dict[str, str], ...] = ()
 
 
-def _fetch_bytes(url: str, *, timeout_s: float, max_bytes: int) -> tuple[bytes, str, int, str, bool]:
+def _fetch_bytes(
+    url: str,
+    *,
+    timeout_s: float,
+    max_bytes: int,
+) -> tuple[bytes, str, int, str, bool]:
     headers = {
         "User-Agent": "deep-research-agent/0.1",
         "Accept": "*/*",
@@ -310,7 +326,13 @@ def _fetch_bytes(url: str, *, timeout_s: float, max_bytes: int) -> tuple[bytes, 
     }
     limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
     transport = httpx.HTTPTransport(retries=0)
-    with httpx.Client(timeout=timeout_s, follow_redirects=True, headers=headers, limits=limits, transport=transport) as client:
+    with httpx.Client(
+        timeout=timeout_s,
+        follow_redirects=True,
+        headers=headers,
+        limits=limits,
+        transport=transport,
+    ) as client:
         with client.stream("GET", url) as r:
             status = int(r.status_code)
             final_url = str(r.url)
@@ -343,7 +365,11 @@ def fetch_document(
     url = _validate_url(url)
 
     max_bytes = min(12_000_000, max(128_000, max_chars * 6))
-    data, final_url, status, ctype, truncated_raw = _fetch_bytes(url, timeout_s=timeout_s, max_bytes=max_bytes)
+    data, final_url, status, ctype, truncated_raw = _fetch_bytes(
+        url,
+        timeout_s=timeout_s,
+        max_bytes=max_bytes,
+    )
 
     _validate_url(final_url)
 
@@ -384,7 +410,11 @@ def fetch_document(
         if (wc < min_words or cc < min_chars) or cc == 0:
             jr = _jina_reader_url(final_url)
             try:
-                data2, final_url2, status2, ctype2, truncated2 = _fetch_bytes(jr, timeout_s=timeout_s, max_bytes=max_bytes)
+                data2, final_url2, status2, ctype2, truncated2 = _fetch_bytes(
+                    jr,
+                    timeout_s=timeout_s,
+                    max_bytes=max_bytes,
+                )
                 text2 = _normalize_text(data2.decode("utf-8", errors="replace"))
                 wc2 = _word_count(text2)
                 cc2 = len(text2)

@@ -3,17 +3,21 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+_dotenv_loader: Any
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _dotenv_loader
 except Exception:
-    load_dotenv = None
+    _dotenv_loader = None
+
+load_dotenv: Any = _dotenv_loader
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENV_PATH = REPO_ROOT / ".env"
 
-if load_dotenv and ENV_PATH.exists():
+if load_dotenv is not None and ENV_PATH.exists():
     load_dotenv(ENV_PATH, override=False)
 
 
@@ -66,14 +70,19 @@ class Settings:
     llamacpp_max_context_tokens: int = 8_192
 
     runs_dir: Path = REPO_ROOT / "runs"
+    checkpoint_path: Path | None = None
     max_page_chars: int = 15_000
     http_timeout_s: float = 20.0
+    default_follow_links: bool = False
+    default_max_links_per_source: int = 0
 
     host: str = "127.0.0.1"
     port: int = 8000
 
     mock_model_name: str = "deterministic-mock-research-model"
     allow_mock_fallback: bool = False
+    review_gate_default: bool = False
+    evidence_citation_threshold: float = 0.34
 
     budget_max_model_calls: int = 25
     budget_max_source_fetches: int = 3
@@ -108,6 +117,8 @@ class Settings:
 
         max_page_chars = _clamp_int(_env_int("MAX_PAGE_CHARS", 15000), 2000, 50000)
         http_timeout_s = _env_float("HTTP_TIMEOUT_S", 20.0)
+        runs_dir = REPO_ROOT / "runs"
+        checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
 
         return Settings(
             model_provider=model_provider,
@@ -133,9 +144,17 @@ class Settings:
                 _env_int("LLAMACPP_MAX_CONTEXT_TOKENS", 8192), 1024, 262144
             ),
 
-            runs_dir=REPO_ROOT / "runs",
+            runs_dir=runs_dir,
+            checkpoint_path=Path(checkpoint_path_raw)
+            if checkpoint_path_raw
+            else runs_dir / "checkpoints.sqlite",
             max_page_chars=max_page_chars,
             http_timeout_s=http_timeout_s,
+            default_follow_links=_env_str("DEFAULT_FOLLOW_LINKS", "false").lower()
+            in ("1", "true", "yes"),
+            default_max_links_per_source=_clamp_int(
+                _env_int("DEFAULT_MAX_LINKS_PER_SOURCE", 0), 0, 10
+            ),
 
             host=_env_str("HOST", "127.0.0.1"),
             port=_env_int("PORT", 8000),
@@ -143,6 +162,9 @@ class Settings:
             mock_model_name=_env_str("MOCK_MODEL_NAME", "deterministic-mock-research-model"),
             allow_mock_fallback=_env_str("ALLOW_MOCK_FALLBACK", "false").lower()
             in ("1", "true", "yes"),
+            review_gate_default=_env_str("REVIEW_GATE_DEFAULT", "false").lower()
+            in ("1", "true", "yes"),
+            evidence_citation_threshold=_env_float("EVIDENCE_CITATION_THRESHOLD", 0.34),
             budget_max_model_calls=_clamp_int(_env_int("BUDGET_MAX_MODEL_CALLS", 25), 0, 1000),
             budget_max_source_fetches=_clamp_int(_env_int("BUDGET_MAX_SOURCE_FETCHES", 3), 0, 1000),
             budget_max_generated_chars=_clamp_int(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from deep_research_agent.settings import Settings
 
-from .contracts import ModelCapability
+from .contracts import HealthStatus, ModelCapability
 
 
 def build_model_registry(settings: Settings) -> list[ModelCapability]:
@@ -10,7 +10,7 @@ def build_model_registry(settings: Settings) -> list[ModelCapability]:
     models: list[ModelCapability] = []
 
     openai_warnings: list[str] = []
-    openai_status = "configured"
+    openai_status: HealthStatus = "configured"
     if not settings.openai_api_key:
         openai_warnings.append("OPENAI_API_KEY is not set.")
         openai_status = "unavailable"
