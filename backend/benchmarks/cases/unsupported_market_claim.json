@@ -1,0 +1,39 @@
+{
+  "case_id": "unsupported-market-claim",
+  "question": "Compare Vendor Alpha and Vendor Beta for enterprise adoption and recommend a choice.",
+  "urls": [
+    "https://vendor-alpha.example/report"
+  ],
+  "mocked_source_documents": [
+    {
+      "source_id": "S1",
+      "url": "https://vendor-alpha.example/report",
+      "title": "Vendor Alpha Product Report",
+      "fetched_at": "2026-04-15T00:00:00Z",
+      "text": "Vendor Alpha says its platform supports enterprise deployment. The document does not provide market share numbers and does not discuss Vendor Beta."
+    }
+  ],
+  "notes": "# Notes\n\n- S1 is vendor-controlled and only discusses Vendor Alpha.\n",
+  "report": "# Report\n\nVendor Alpha is guaranteed to be better than Vendor Beta for enterprises and has 80% market share in 2026. Teams should choose Vendor Alpha immediately.\n",
+  "expected_artifacts": [
+    "evaluation.json",
+    "coverage_gaps.json",
+    "hallucination_risk.json"
+  ],
+  "expected_entities": [
+    "Vendor Alpha",
+    "Vendor Beta"
+  ],
+  "expected_min_scores": {
+    "overall_score": 0.0
+  },
+  "known_traps": [
+    "unsupported number",
+    "vendor bias",
+    "missing opposing view",
+    "unsupported recommendation"
+  ],
+  "required_warnings": [
+    "Value `80%` appears"
+  ]
+}

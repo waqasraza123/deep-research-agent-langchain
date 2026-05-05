@@ -70,6 +70,8 @@ class Settings:
     llamacpp_max_context_tokens: int = 8_192
 
     runs_dir: Path = REPO_ROOT / "runs"
+    memory_data_dir: Path | None = None
+    memory_stale_after_days: int = 30
     checkpoint_path: Path | None = None
     max_page_chars: int = 15_000
     http_timeout_s: float = 20.0
@@ -118,6 +120,7 @@ class Settings:
         max_page_chars = _clamp_int(_env_int("MAX_PAGE_CHARS", 15000), 2000, 50000)
         http_timeout_s = _env_float("HTTP_TIMEOUT_S", 20.0)
         runs_dir = REPO_ROOT / "runs"
+        memory_data_dir_raw = _env_str("MEMORY_DATA_DIR", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
 
         return Settings(
@@ -145,6 +148,12 @@ class Settings:
             ),
 
             runs_dir=runs_dir,
+            memory_data_dir=Path(memory_data_dir_raw)
+            if memory_data_dir_raw
+            else runs_dir / "_memory",
+            memory_stale_after_days=_clamp_int(
+                _env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650
+            ),
             checkpoint_path=Path(checkpoint_path_raw)
             if checkpoint_path_raw
             else runs_dir / "checkpoints.sqlite",

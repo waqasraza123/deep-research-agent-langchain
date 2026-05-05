@@ -1,0 +1,44 @@
+{
+  "case_id": "current-ai-search-quality",
+  "question": "What is the latest evidence on AI search quality in 2026, and what are the main limitations?",
+  "urls": [
+    "https://example.org/official-ai-search-2026",
+    "https://example.org/independent-ai-search-review-2026"
+  ],
+  "mocked_source_documents": [
+    {
+      "source_id": "S1",
+      "url": "https://example.org/official-ai-search-2026",
+      "title": "Official AI Search Quality Update 2026",
+      "fetched_at": "2026-05-01T00:00:00Z",
+      "text": "As of 2026, the official quality update reports that AI search systems improved answer grounding in 2026. The update states that current evaluations still require source attribution and freshness checks."
+    },
+    {
+      "source_id": "S2",
+      "url": "https://example.org/independent-ai-search-review-2026",
+      "title": "Independent AI Search Review 2026",
+      "fetched_at": "2026-05-02T00:00:00Z",
+      "text": "An independent 2026 review found that AI search quality depends on query type. Limitations include stale citations, incomplete source diversity, and overconfident summaries."
+    }
+  ],
+  "notes": "# Notes\n\n- S1 says current AI search quality improved grounding in 2026.\n- S2 says limitations include stale citations and overconfident summaries.\n",
+  "report": "# Report\n\nResearch date: as of 2026-05-05.\n\nAI search quality in 2026 appears improved for grounded answers, but the evidence is mixed by query type [S1, S2]. Current limitations include stale citations, incomplete source diversity, and overconfident summaries [S2]. The main tradeoff is that official updates describe progress while independent reviews emphasize caveats and limitations [S1, S2].\n",
+  "expected_artifacts": [
+    "evaluation.json",
+    "quality_score.json",
+    "hallucination_risk.json"
+  ],
+  "expected_entities": [
+    "AI"
+  ],
+  "expected_min_scores": {
+    "overall_score": 0.55,
+    "freshness_handling": 0.65,
+    "citation_support": 0.45
+  },
+  "known_traps": [
+    "latest wording without source dates",
+    "overclaiming that AI search is solved"
+  ],
+  "required_warnings": []
+}
