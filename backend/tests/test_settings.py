@@ -22,6 +22,22 @@ def test_settings_defaults_are_offline_constructible(tmp_path: Path):
     assert settings.orchestration_enabled is True
     assert settings.synthesis_enabled is True
     assert settings.evaluation_enabled is True
+    assert settings.protocol_selection_enabled is True
+    assert settings.intelligence_profile == "balanced_research"
+    assert settings.source_discovery_enabled is False
+    assert settings.source_discovery_provider == "disabled"
+    assert settings.max_discovery_queries == 8
+    assert settings.max_selected_discovered_sources == 3
+    assert settings.document_intelligence_enabled is True
+    assert settings.chunk_max_chars == 3200
+    assert settings.chunk_overlap_chars == 300
+    assert settings.retrieval_enabled is True
+    assert settings.embedding_provider == "disabled"
+    assert settings.context_pack_max_chars == 11_000
+    assert settings.verification_enabled is True
+    assert settings.verification_gate_enabled is False
+    assert settings.max_verification_tasks == 12
+    assert settings.confidence_threshold_for_review == 0.55
     assert settings.max_memory_results == 20
     assert settings.source_scoring_threshold == 0.45
     assert settings.evaluation_threshold == 0.65
@@ -43,6 +59,22 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("REVIEW_GATE_DEFAULT", "true")
     monkeypatch.setenv("MEMORY_ENABLED", "false")
     monkeypatch.setenv("MAX_MEMORY_RESULTS", "7")
+    monkeypatch.setenv("PROTOCOL_SELECTION_ENABLED", "false")
+    monkeypatch.setenv("INTELLIGENCE_PROFILE", "offline_mock")
+    monkeypatch.setenv("SOURCE_DISCOVERY_ENABLED", "true")
+    monkeypatch.setenv("SOURCE_DISCOVERY_PROVIDER", "mock")
+    monkeypatch.setenv("MAX_DISCOVERY_QUERIES", "4")
+    monkeypatch.setenv("MAX_SELECTED_DISCOVERED_SOURCES", "2")
+    monkeypatch.setenv("DOCUMENT_INTELLIGENCE_ENABLED", "false")
+    monkeypatch.setenv("CHUNK_MAX_CHARS", "900")
+    monkeypatch.setenv("CHUNK_OVERLAP_CHARS", "80")
+    monkeypatch.setenv("RETRIEVAL_ENABLED", "false")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+    monkeypatch.setenv("CONTEXT_PACK_MAX_CHARS", "5000")
+    monkeypatch.setenv("VERIFICATION_ENABLED", "false")
+    monkeypatch.setenv("VERIFICATION_GATE_ENABLED", "true")
+    monkeypatch.setenv("MAX_VERIFICATION_TASKS", "6")
+    monkeypatch.setenv("CONFIDENCE_THRESHOLD_FOR_REVIEW", "0.72")
 
     settings = Settings.load()
 
@@ -53,4 +85,22 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     assert settings.review_gate_default is True
     assert settings.memory_enabled is False
     assert settings.max_memory_results == 7
+    assert settings.protocol_selection_enabled is False
+    assert settings.intelligence_profile == "offline_mock"
+    assert settings.source_discovery_enabled is True
+    assert settings.source_discovery_provider == "mock"
+    assert settings.source_discovery_max_queries == 4
+    assert settings.max_discovery_queries == 4
+    assert settings.source_discovery_max_selected_sources == 2
+    assert settings.max_selected_discovered_sources == 2
+    assert settings.document_intelligence_enabled is False
+    assert settings.chunk_max_chars == 900
+    assert settings.chunk_overlap_chars == 80
+    assert settings.retrieval_enabled is False
+    assert settings.embedding_provider == "mock"
+    assert settings.context_pack_max_chars == 5000
+    assert settings.verification_enabled is False
+    assert settings.verification_gate_enabled is True
+    assert settings.max_verification_tasks == 6
+    assert settings.confidence_threshold_for_review == 0.72
     assert settings.default_budget().max_crawl_expansion == 2

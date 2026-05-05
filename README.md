@@ -161,14 +161,17 @@ Intelligence and traceability artifacts:
 - `quality_score.md`
 - `intelligence_summary.json`
 - `intelligence_summary.md`
+- `intelligence_pipeline_summary.json`
+- `intelligence_pipeline_summary.md`
 - `events.jsonl`
 - `events.md`
 - `budget.json`
 
-Fetched source manifests use a stable `source_identity` object where possible. It includes
-`source_id`, `url`, `canonical_url`, `normalized_url`, `domain`, `title`, `content_hash`,
-`source_kind`, `parent_url`, and `fetched_at`, so memory, source audit, synthesis, and evaluation
-can refer to the same source consistently.
+Fetched source manifests use a stable `source_identity` object where possible. Document and
+retrieval artifacts add stable `document_identity` and `chunk_identity` objects derived from the
+source identity, normalized content hash, offsets, and section path. These ids let source
+discovery, fetching, document intelligence, retrieval, verification, synthesis, and evaluation
+refer to the same source and chunk consistently.
 
 Fetched source text and metadata live under `runs/<thread_id>/sources/`.
 
@@ -354,6 +357,7 @@ Verification endpoints:
 - `GET /runs/{thread_id}/verification`
 - `GET /runs/{thread_id}/confidence-calibration`
 - `GET /runs/{thread_id}/claim-rewrite-suggestions`
+- `GET /runs/{thread_id}/intelligence-pipeline-summary`
 
 Set `VERIFICATION_ENABLED=false` to skip automatic verification. Set
 `VERIFICATION_GATE_ENABLED=true` to require review when high-priority unsupported, contradicted, or
@@ -378,6 +382,31 @@ MODEL_PROVIDER=mock
 
 Mock output is clearly marked and is not factual research. Mock fallback is only used when
 `ALLOW_MOCK_FALLBACK=true` or request field `allow_mock_fallback=true` is set.
+
+## Offline Configuration
+
+The intelligence pipeline is enabled by default but offline-safe. It uses deterministic protocols,
+heuristic document parsing, lexical retrieval, and local verification without external search,
+embedding, OpenAI, or Ollama calls unless explicitly configured.
+
+Useful settings:
+
+- `PROTOCOL_SELECTION_ENABLED=true`
+- `INTELLIGENCE_PROFILE=balanced_research`
+- `SOURCE_DISCOVERY_ENABLED=false`
+- `SOURCE_DISCOVERY_PROVIDER=disabled` or `mock`
+- `MAX_DISCOVERY_QUERIES=8`
+- `MAX_SELECTED_DISCOVERED_SOURCES=3`
+- `DOCUMENT_INTELLIGENCE_ENABLED=true`
+- `CHUNK_MAX_CHARS=3200`
+- `CHUNK_OVERLAP_CHARS=300`
+- `RETRIEVAL_ENABLED=true`
+- `EMBEDDING_PROVIDER=disabled`
+- `CONTEXT_PACK_MAX_CHARS=11000`
+- `VERIFICATION_ENABLED=true`
+- `VERIFICATION_GATE_ENABLED=false`
+- `MAX_VERIFICATION_TASKS=12`
+- `CONFIDENCE_THRESHOLD_FOR_REVIEW=0.55`
 
 ## Source Expansion
 

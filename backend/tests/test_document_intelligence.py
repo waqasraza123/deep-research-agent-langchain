@@ -126,7 +126,12 @@ def test_artifact_writing(tmp_path: Path):
     assert (tmp_path / "document_profiles.md").exists()
     assert (tmp_path / "document_chunks.jsonl").read_text(encoding="utf-8").strip()
     payload = json.loads((tmp_path / "document_profiles.json").read_text(encoding="utf-8"))
-    assert payload["profiles"][0]["source_id"] == "S1"
+    profile = payload["profiles"][0]
+    assert profile["source_id"] == "S1"
+    assert profile["document_id"].startswith("D-")
+    assert profile["document_identity"]["source_id"] == "S1"
+    assert profile["chunks"][0]["document_id"] == profile["document_id"]
+    assert profile["chunks"][0]["chunk_identity"]["source_id"] == "S1"
 
 
 def test_profile_route(client):
@@ -160,4 +165,7 @@ def test_profile_document_end_to_end():
     assert profile.sections
     assert profile.chunks
     assert profile.tables
+    assert profile.document_id.startswith("D-")
+    assert profile.chunks[0].document_id == profile.document_id
+    assert profile.chunks[0].chunk_identity.document_id == profile.document_id
     assert profile.quality_summary["structure_score"] > 0

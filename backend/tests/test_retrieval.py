@@ -128,6 +128,12 @@ def test_entity_numeric_and_date_overlap(tmp_path: Path):
     index = build_retrieval_index(run_dir, thread_id="retrieval-test")
     assert index.chunks
     chunk = next(c for c in index.chunks if c.source_id == "S1")
+    document = next(d for d in index.documents if d.source_id == "S1")
+    assert document.document_id.startswith("D-")
+    assert document.document_identity.source_id == "S1"
+    assert chunk.document_id == document.document_id
+    assert chunk.chunk_id.startswith("C-")
+    assert chunk.chunk_identity.document_id == document.document_id
     assert "Acme Corp" in chunk.entities
     assert "42%" in chunk.numbers
     assert "2025" in chunk.dates
