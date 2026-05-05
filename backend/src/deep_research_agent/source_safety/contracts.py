@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import WarningSeverity
+
 RiskLevel = Literal["none", "low", "medium", "high", "critical"]
 RecommendedAction = Literal[
     "allow",
@@ -23,10 +25,14 @@ SanitizationMode = Literal[
 
 
 class SourceSafetyWarning(BaseModel):
+    subsystem: str = "source_safety"
     code: str
     risk_level: RiskLevel = "low"
+    severity: WarningSeverity = WarningSeverity.LOW
     message: str
     source_id: str | None = None
+    affected_artifacts: list[str] = Field(default_factory=list)
+    affected_sources: list[str] = Field(default_factory=list)
     evidence: str = ""
     recommended_action: RecommendedAction = "allow_with_warning"
     explanation: str = ""

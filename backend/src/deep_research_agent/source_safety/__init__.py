@@ -235,7 +235,10 @@ def _warnings_for_assessment(
             SourceSafetyWarning(
                 code=f"prompt_injection.{finding.pattern}",
                 risk_level=finding.risk_level,
+                severity=_severity_from_risk(finding.risk_level),
                 source_id=source_id,
+                affected_sources=[source_id],
+                affected_artifacts=["source_safety.json", "prompt_injection_findings.json"],
                 message=finding.explanation,
                 evidence=finding.matched_text,
                 recommended_action=finding.recommended_action,
@@ -247,7 +250,10 @@ def _warnings_for_assessment(
             SourceSafetyWarning(
                 code=f"source_poisoning.{finding.category}",
                 risk_level=finding.risk_level,
+                severity=_severity_from_risk(finding.risk_level),
                 source_id=source_id,
+                affected_sources=[source_id],
+                affected_artifacts=["source_safety.json", "source_poisoning_findings.json"],
                 message=finding.explanation,
                 evidence=finding.evidence,
                 recommended_action=finding.recommended_action,
@@ -259,13 +265,20 @@ def _warnings_for_assessment(
             SourceSafetyWarning(
                 code="source_safety.high_risk_context_control",
                 risk_level=risk_score.risk_level,
+                severity=_severity_from_risk(risk_score.risk_level),
                 source_id=source_id,
+                affected_sources=[source_id],
+                affected_artifacts=["source_safety.json", "sanitized_sources.json"],
                 message="High-risk source content must not be passed raw into model context.",
                 recommended_action=risk_score.recommended_action,
                 explanation="Risk score crossed the model-context safety threshold.",
             )
         )
     return warnings
+
+
+def _severity_from_risk(risk_level: str) -> str:
+    return risk_level if risk_level in {"info", "low", "medium", "high", "critical"} else "medium"
 
 
 def _summary(batch: SourceSafetyBatch) -> dict[str, Any]:

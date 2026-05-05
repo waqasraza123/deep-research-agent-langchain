@@ -92,6 +92,15 @@ def test_input_fingerprint_is_deterministic(tmp_path: Path):
 
 def test_manifest_generation_and_secret_redaction(tmp_path: Path):
     _repo, run, td = _create_run(tmp_path)
+    (td / "source_safety.json").write_text(
+        json.dumps({"warnings": [], "summary": {"source_count": 1}}) + "\n",
+        encoding="utf-8",
+    )
+    (td / "hypotheses.json").write_text(
+        json.dumps({"summary": {"total_hypotheses": 1, "average_confidence": 0.4}}) + "\n",
+        encoding="utf-8",
+    )
+    (td / "advanced_intelligence_summary.json").write_text("{}\n", encoding="utf-8")
 
     manifest = build_artifact_manifest(td, "run-1", run)
 
@@ -103,6 +112,22 @@ def test_manifest_generation_and_secret_redaction(tmp_path: Path):
     assert "sk-test-secret" not in json.dumps(
         [m.redacted_config for m in manifest.model_invocations]
     )
+    safety = next(
+        item for item in manifest.artifacts if item.artifact_path == "source_safety.json"
+    )
+    hypotheses = next(
+        item for item in manifest.artifacts if item.artifact_path == "hypotheses.json"
+    )
+    advanced = next(
+        item
+        for item in manifest.artifacts
+        if item.artifact_path == "advanced_intelligence_summary.json"
+    )
+    assert safety.producer_subsystem == "source_safety"
+    assert hypotheses.producer_subsystem == "hypotheses"
+    assert advanced.producer_subsystem == "advanced_summary"
+    assert any(dep.path == "sources.json" for dep in safety.artifact_dependencies)
+    assert any(dep.path == "report.md" for dep in hypotheses.artifact_dependencies)
 
 
 def test_dependency_dag_generation(tmp_path: Path):

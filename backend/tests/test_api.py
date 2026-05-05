@@ -115,6 +115,8 @@ def test_mock_run_writes_intelligent_artifacts_and_public_run_snapshot(client):
     assert "intelligence_summary.md" in paths
     assert "intelligence_pipeline_summary.json" in paths
     assert "intelligence_pipeline_summary.md" in paths
+    assert "advanced_intelligence_summary.json" in paths
+    assert "advanced_intelligence_summary.md" in paths
 
     run_snapshot = client.get(f"/runs/{tid}/artifacts/run.json")
     assert run_snapshot.status_code == 200
@@ -140,3 +142,9 @@ def test_mock_run_writes_intelligent_artifacts_and_public_run_snapshot(client):
         "verification",
     }
     assert expected_stages <= {stage["stage"] for stage in pipeline_body["stages"]}
+
+    advanced_summary = client.get(f"/runs/{tid}/advanced-intelligence-summary")
+    assert advanced_summary.status_code == 200
+    advanced_body = advanced_summary.json()
+    assert advanced_body["thread_id"] == tid
+    assert "overall_confidence_level" in advanced_body

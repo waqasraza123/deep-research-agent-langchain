@@ -196,6 +196,20 @@ def _uses_sources(path: str) -> bool:
             "source_audit",
             "citation",
             "synthesis",
+            "source_safety",
+            "prompt_injection",
+            "source_poisoning",
+            "sanitized_sources",
+            "temporal",
+            "timeline",
+            "currentness",
+            "quantitative",
+            "numeric",
+            "table_profiles",
+            "csv_profiles",
+            "hypoth",
+            "confidence_updates",
+            "advanced_intelligence_summary",
         )
     )
 

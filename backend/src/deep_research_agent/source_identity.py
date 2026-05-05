@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+from enum import Enum
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 TRACKING_QUERY_PREFIXES = ("utm_",)
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref"}
@@ -44,6 +45,47 @@ class ChunkIdentity(BaseModel):
     ordinal: int = 0
 
 
+class ArtifactIdentity(BaseModel):
+    artifact_id: str
+    artifact_path: str
+    artifact_type: str = "artifact"
+    content_hash: str | None = None
+    producer_subsystem: str | None = None
+
+
+class ClaimIdentity(BaseModel):
+    claim_id: str
+    normalized_text_hash: str
+    origin: str = ""
+    origin_ref: str | None = None
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class HypothesisIdentity(BaseModel):
+    hypothesis_id: str
+    normalized_text_hash: str
+    hypothesis_type: str = "unknown"
+    origin: str = ""
+
+
+class WarningSeverity(str, Enum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ResearchWarning(BaseModel):
+    subsystem: str
+    code: str
+    message: str
+    severity: WarningSeverity = WarningSeverity.MEDIUM
+    affected_artifacts: list[str] = Field(default_factory=list)
+    affected_sources: list[str] = Field(default_factory=list)
+    recommended_action: str = ""
+
+
 def stable_source_id(
     *,
     url: str,
@@ -79,6 +121,25 @@ def stable_chunk_id(
     key = f"{document_id}|{source_id}|{content_hash}|{start_offset}|{end_offset}|{ordinal}"
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:14]
     return f"C-{digest}"
+
+
+def stable_artifact_id(*, artifact_path: str, content_hash: str | None = None) -> str:
+    digest = hashlib.sha1(f"{artifact_path}|{content_hash or ''}".encode("utf-8")).hexdigest()[:12]
+    return f"A-{digest}"
+
+
+def stable_claim_id(*, normalized_text: str, origin: str = "", ordinal: int = 0) -> str:
+    digest = hashlib.sha1(f"{origin}|{ordinal}|{normalized_text}".encode("utf-8")).hexdigest()[:12]
+    return f"CL-{digest}"
+
+
+def stable_hypothesis_id(*, normalized_text: str, origin: str = "", ordinal: int = 0) -> str:
+    digest = hashlib.sha1(f"{origin}|{ordinal}|{normalized_text}".encode("utf-8")).hexdigest()[:12]
+    return f"H-{digest}"
+
+
+def text_hash(text: str) -> str:
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()
 
 
 def source_domain(url: str | None) -> str | None:

@@ -38,6 +38,10 @@ class HypothesisBuildInput:
     source_audit: dict[str, Any] | None = None
     retrieval_context: dict[str, Any] | None = None
     synthesis_output: dict[str, Any] | None = None
+    temporal_profile: dict[str, Any] | None = None
+    currentness_assessment: dict[str, Any] | None = None
+    quantitative_profile: dict[str, Any] | None = None
+    source_safety: dict[str, Any] | None = None
     available_artifacts: list[str] = field(default_factory=list)
 
 
@@ -90,6 +94,10 @@ def load_hypothesis_input(run_dir: Path, *, thread_id: str) -> HypothesisBuildIn
         source_audit=_load_json_object(run_dir / "source_audit.json"),
         retrieval_context=_load_json_object(run_dir / "context_packs.json"),
         synthesis_output=_load_json_object(run_dir / "synthesis_output.json"),
+        temporal_profile=_load_json_object(run_dir / "temporal_profile.json"),
+        currentness_assessment=_load_json_object(run_dir / "currentness_assessment.json"),
+        quantitative_profile=_load_json_object(run_dir / "quantitative_profile.json"),
+        source_safety=_load_json_object(run_dir / "source_safety.json"),
         available_artifacts=available,
     )
 

@@ -12,6 +12,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from .advanced_summary import (
+    build_advanced_intelligence_summary,
+    read_or_build_advanced_intelligence_summary,
+    write_advanced_intelligence_summary,
+)
 from .agent_factory import AgentService
 from .artifacts import (
     INTERNAL_FILES,
@@ -924,13 +929,21 @@ def _try_rebuild_evaluation(
 
 
 def _try_rebuild_hypotheses(
+    settings: Settings,
     td,
     thread_id: str,
     warnings: list[str],
     run_context: RunContext | None = None,
 ) -> None:
+    if not settings.hypothesis_engine_enabled:
+        return
     try:
-        hypothesis_set = rebuild_hypothesis_artifacts(td, thread_id=thread_id)
+        hypothesis_set = rebuild_hypothesis_artifacts(
+            td,
+            thread_id=thread_id,
+            max_hypotheses=settings.max_hypotheses,
+            max_evidence_items=settings.max_hypothesis_evidence_items,
+        )
     except Exception as e:
         log.exception("hypothesis rebuild failed")
         warnings.append(f"Hypothesis artifacts were not generated: {type(e).__name__}: {e}")
@@ -1030,6 +1043,7 @@ def _try_rebuild_intelligence_summary(
 
 def _try_rebuild_temporal(
     *,
+    settings: Settings,
     td,
     thread_id: str,
     question: str,
@@ -1037,6 +1051,8 @@ def _try_rebuild_temporal(
     run_context: RunContext | None = None,
     include_claims: bool = True,
 ):
+    if not settings.temporal_intelligence_enabled:
+        return None
     try:
         bundle = rebuild_temporal_artifacts(
             td,
@@ -1114,15 +1130,19 @@ def _write_audit_for_sources(
 
 def _write_source_safety_for_manifest(
     *,
+    settings: Settings,
     thread_dir,
     thread_id: str,
     question: str,
     run_context: RunContext | None = None,
 ):
+    if not settings.source_safety_enabled:
+        return None
     batch = assess_sources_from_manifest(
         thread_dir=thread_dir,
         thread_id=thread_id,
         question=question,
+        mode=_source_safety_mode(settings.high_risk_source_policy),
     )
     if run_context:
         for rel_path in SOURCE_SAFETY_ARTIFACTS:
@@ -1140,6 +1160,86 @@ def _write_source_safety_for_manifest(
             metadata=batch.summary,
         )
     return batch
+
+
+def _source_safety_mode(policy: str) -> str:
+    normalized = (policy or "").strip().lower()
+    if normalized in {"exclude_high", "exclude_high_risk", "strict"}:
+        return "exclude_high_risk_source"
+    if normalized in {"summary", "evidence_only"}:
+        return "evidence_only_summary"
+    if normalized in {"remove", "remove_suspicious"}:
+        return "remove_suspicious_blocks"
+    return "quote_suspicious_blocks"
+
+
+def _try_write_advanced_summary(
+    *,
+    td,
+    thread_id: str,
+    question: str,
+    warnings: list[str],
+    run_context: RunContext | None = None,
+) -> None:
+    try:
+        summary = build_advanced_intelligence_summary(
+            td,
+            thread_id=thread_id,
+            question=question,
+        )
+        written = write_advanced_intelligence_summary(td, summary)
+    except Exception as e:
+        log.exception("advanced intelligence summary rebuild failed")
+        warnings.append(
+            f"Advanced intelligence summary was not generated: {type(e).__name__}: {e}"
+        )
+        return
+    for warning in summary.warnings:
+        if warning.severity in {"high", "critical"} and warning.message not in warnings:
+            warnings.append(warning.message)
+    if run_context:
+        for rel_path in written:
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+        run_context.log(
+            "artifact_written",
+            message="advanced_intelligence_summary",
+            metadata={
+                "overall_confidence": summary.overall_confidence_score,
+                "warning_count": len(summary.warnings),
+            },
+        )
+
+
+def _summary_with_advanced_intelligence(td, summary_text: str) -> str:
+    path = td / "advanced_intelligence_summary.json"
+    if not path.exists():
+        return summary_text
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return summary_text
+    source_safety = data.get("source_safety") if isinstance(data, dict) else {}
+    temporal = data.get("temporal") if isinstance(data, dict) else {}
+    quantitative = data.get("quantitative") if isinstance(data, dict) else {}
+    hypotheses = data.get("hypotheses") if isinstance(data, dict) else {}
+    warning_count = len(data.get("warnings") or []) if isinstance(data, dict) else 0
+    advanced_line = (
+        "Advanced intelligence: "
+        f"confidence={data.get('overall_confidence_level', 'unknown')} "
+        f"({data.get('overall_confidence_score', 0.0)}); "
+        f"warnings={warning_count}; "
+        f"source_safety_high={source_safety.get('high_risk_sources', 0)}; "
+        f"source_safety_critical={source_safety.get('critical_risk_sources', 0)}; "
+        f"currentness={temporal.get('currentness_status', 'unknown')}; "
+        f"quantitative_failures={quantitative.get('consistency_failures', 0)}; "
+        f"hypotheses_supported={hypotheses.get('supported', 0)}; "
+        f"hypotheses_contradicted={hypotheses.get('contradicted', 0)}; "
+        f"hypotheses_needs_more_evidence={hypotheses.get('needs_more_evidence', 0)}."
+    )
+    if summary_text and advanced_line in summary_text:
+        return summary_text
+    return (summary_text.rstrip() + "\n\n" + advanced_line).strip()
 
 
 def _source_context_allowed(source: SourceRecord | dict[str, Any]) -> bool:
@@ -1231,11 +1331,17 @@ def _quantitative_context_block(summary: QuantitativeSummary | None) -> str:
 
 def _try_rebuild_quantitative(
     *,
+    settings: Settings,
     td,
     thread_id: str,
     warnings: list[str],
     run_context: RunContext | None = None,
 ) -> QuantitativeSummary | None:
+    if (
+        not settings.quantitative_intelligence_enabled
+        or not settings.quantitative_extraction_enabled
+    ):
+        return None
     try:
         summary = rebuild_quantitative_artifacts(td, thread_id=thread_id)
     except Exception as e:
@@ -1305,11 +1411,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     app = FastAPI(title="Deep Research Agent")
 
     def _refresh_provenance_for_run(thread_id: str) -> None:
+        if not settings.provenance_enabled or not settings.provenance_manifest_enabled:
+            return
         try:
             refresh_provenance_artifacts(
                 settings.runs_dir,
                 thread_id,
                 run=run_repository.get_or_none(thread_id),
+                replay_plan_enabled=settings.replay_plan_enabled,
             )
         except Exception:
             log.exception("provenance refresh failed for run %s", thread_id)
@@ -1596,6 +1705,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     discovery_provenance=discovery_provenance,
                 )
                 _write_source_safety_for_manifest(
+                    settings=effective_settings,
                     thread_dir=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -1623,6 +1733,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     run_context=run_context,
                 )
                 _try_rebuild_quantitative(
+                    settings=effective_settings,
                     td=td,
                     thread_id=thread_id,
                     warnings=warnings,
@@ -1709,6 +1820,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     metadata={"total_claims": ledger.coverage.total_claims},
                 )
                 _try_rebuild_temporal(
+                    settings=effective_settings,
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -1717,6 +1829,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     include_claims=True,
                 )
                 _try_rebuild_quantitative(
+                    settings=effective_settings,
                     td=td,
                     thread_id=thread_id,
                     warnings=warnings,
@@ -1749,6 +1862,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         f"Synthesis artifacts were not generated: {type(e).__name__}: {e}"
                     )
                 _try_rebuild_temporal(
+                    settings=effective_settings,
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -1756,7 +1870,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     run_context=run_context,
                     include_claims=True,
                 )
-                _try_rebuild_hypotheses(td, thread_id, warnings, run_context)
+                _try_rebuild_hypotheses(effective_settings, td, thread_id, warnings, run_context)
                 _try_rebuild_evaluation(td, thread_id, warnings, run_context)
                 _try_rebuild_intelligence_summary(
                     settings=effective_settings,
@@ -1772,8 +1886,24 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     question=req.question.strip(),
                     run_context=run_context,
                 )
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=warnings,
+                    run_context=run_context,
+                )
                 run_context.budget_warning()
                 run_context.log("run_completed", message="mock run completed", metadata=metadata)
+                run_repository.set_warnings(thread_id, warnings)
+                _refresh_provenance_for_run(thread_id)
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=warnings,
+                    run_context=run_context,
+                )
                 run_repository.set_warnings(thread_id, warnings)
                 _refresh_provenance_for_run(thread_id)
                 run_repository.refresh_artifacts(thread_id)
@@ -1799,11 +1929,27 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     question=req.question.strip(),
                     run_context=run_context,
                 )
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=warnings,
+                    run_context=run_context,
+                )
+                mock_summary = _summary_with_advanced_intelligence(
+                    td,
+                    "[MOCK OUTPUT] Deterministic offline run completed.",
+                )
+                run_repository.set_output_summary(
+                    thread_id,
+                    summary=mock_summary,
+                    budget_summary=read_budget_file(td / "budget.json"),
+                )
                 _refresh_provenance_for_run(thread_id)
                 run_repository.refresh_artifacts(thread_id)
                 return {
                     "thread_id": thread_id,
-                    "summary": "[MOCK OUTPUT] Deterministic offline run completed.",
+                    "summary": mock_summary,
                     "strategy": strategy.to_json_dict() if strategy else None,
                     "warnings": warnings,
                     "artifacts": [
@@ -1829,12 +1975,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             _annotate_discovered_sources(crawl_result, discovery_provenance)
             write_sources_manifest(td / "sources.json", crawl_result.sources)
             safety_batch = _write_source_safety_for_manifest(
+                settings=effective_settings,
                 thread_dir=td,
                 thread_id=thread_id,
                 question=req.question.strip(),
                 run_context=run_context,
             )
-            pre_agent_warnings.extend(warning.message for warning in safety_batch.warnings)
+            if safety_batch is not None:
+                pre_agent_warnings.extend(warning.message for warning in safety_batch.warnings)
             manifest_payload = _load_json_file(td / "sources.json")
             sources_meta = (
                 [item for item in manifest_payload if isinstance(item, dict)]
@@ -1864,6 +2012,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 run_context=run_context,
             )
             pre_agent_temporal = _try_rebuild_temporal(
+                settings=effective_settings,
                 td=td,
                 thread_id=thread_id,
                 question=req.question.strip(),
@@ -1872,6 +2021,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 include_claims=False,
             )
             quantitative_summary = _try_rebuild_quantitative(
+                settings=effective_settings,
                 td=td,
                 thread_id=thread_id,
                 warnings=pre_agent_warnings,
@@ -2070,6 +2220,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         f"{type(evidence_error).__name__}: {evidence_error}"
                     )
                 _try_rebuild_temporal(
+                    settings=settings,
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -2078,6 +2229,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     include_claims=True,
                 )
                 _try_rebuild_quantitative(
+                    settings=settings,
                     td=td,
                     thread_id=thread_id,
                     warnings=fallback_warnings,
@@ -2099,6 +2251,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         f"{type(synthesis_error).__name__}: {synthesis_error}"
                     )
                 _try_rebuild_temporal(
+                    settings=settings,
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -2106,7 +2259,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     run_context=run_context,
                     include_claims=True,
                 )
-                _try_rebuild_hypotheses(td, thread_id, fallback_warnings, run_context)
+                _try_rebuild_hypotheses(
+                    settings,
+                    td,
+                    thread_id,
+                    fallback_warnings,
+                    run_context,
+                )
                 _try_rebuild_evaluation(td, thread_id, fallback_warnings, run_context)
                 _try_rebuild_intelligence_summary(
                     settings=settings,
@@ -2120,6 +2279,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
+                    run_context=run_context,
+                )
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=fallback_warnings,
                     run_context=run_context,
                 )
                 run_repository.set_warnings(thread_id, fallback_warnings)
@@ -2147,11 +2313,33 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     question=req.question.strip(),
                     run_context=run_context,
                 )
-                _refresh_provenance_for_run(thread_id)
-                run_repository.refresh_artifacts(thread_id)
-                fallback_summary = (
-                    "[MOCK OUTPUT] Explicit mock fallback completed after model failure."
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=fallback_warnings,
+                    run_context=run_context,
                 )
+                run_repository.set_warnings(thread_id, fallback_warnings)
+                _refresh_provenance_for_run(thread_id)
+                _try_write_advanced_summary(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=fallback_warnings,
+                    run_context=run_context,
+                )
+                _refresh_provenance_for_run(thread_id)
+                fallback_summary = _summary_with_advanced_intelligence(
+                    td,
+                    "[MOCK OUTPUT] Explicit mock fallback completed after model failure.",
+                )
+                run_repository.set_output_summary(
+                    thread_id,
+                    summary=fallback_summary,
+                    budget_summary=read_budget_file(td / "budget.json"),
+                )
+                run_repository.refresh_artifacts(thread_id)
                 return {
                     "thread_id": thread_id,
                     "summary": fallback_summary,
@@ -2198,6 +2386,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             log.exception("evidence rebuild failed")
             warnings.append(f"Evidence artifacts were not generated: {type(e).__name__}: {e}")
         _try_rebuild_temporal(
+            settings=settings,
             td=td,
             thread_id=thread_id,
             question=req.question.strip(),
@@ -2206,6 +2395,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             include_claims=True,
         )
         _try_rebuild_quantitative(
+            settings=settings,
             td=td,
             thread_id=thread_id,
             warnings=warnings,
@@ -2232,6 +2422,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             log.exception("synthesis rebuild failed")
             warnings.append(f"Synthesis artifacts were not generated: {type(e).__name__}: {e}")
         _try_rebuild_temporal(
+            settings=settings,
             td=td,
             thread_id=thread_id,
             question=req.question.strip(),
@@ -2239,7 +2430,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             run_context=run_context,
             include_claims=True,
         )
-        _try_rebuild_hypotheses(td, thread_id, warnings, run_context)
+        _try_rebuild_hypotheses(settings, td, thread_id, warnings, run_context)
         _try_rebuild_evaluation(td, thread_id, warnings, run_context)
         _try_rebuild_intelligence_summary(
             settings=settings,
@@ -2253,6 +2444,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             td=td,
             thread_id=thread_id,
             question=req.question.strip(),
+            run_context=run_context,
+        )
+        _try_write_advanced_summary(
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
+            warnings=warnings,
             run_context=run_context,
         )
         for artifact in list_artifacts(settings.runs_dir, thread_id):
@@ -2283,12 +2481,34 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             question=req.question.strip(),
             run_context=run_context,
         )
+        _try_write_advanced_summary(
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
+            warnings=warnings,
+            run_context=run_context,
+        )
+        run_repository.set_warnings(thread_id, warnings)
         _refresh_provenance_for_run(thread_id)
+        _try_write_advanced_summary(
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
+            warnings=warnings,
+            run_context=run_context,
+        )
+        _refresh_provenance_for_run(thread_id)
+        final_summary = _summary_with_advanced_intelligence(td, summary_text)
+        run_repository.set_output_summary(
+            thread_id,
+            summary=final_summary,
+            budget_summary=read_budget_file(td / "budget.json"),
+        )
         run_repository.refresh_artifacts(thread_id)
 
         return {
             "thread_id": thread_id,
-            "summary": summary_text,
+            "summary": final_summary,
             "strategy": strategy.to_json_dict() if strategy else None,
             "warnings": warnings,
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
@@ -2384,7 +2604,12 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
         warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
         try:
-            hypothesis_set = rebuild_hypothesis_artifacts(td, thread_id=thread_id)
+            hypothesis_set = rebuild_hypothesis_artifacts(
+                td,
+                thread_id=thread_id,
+                max_hypotheses=settings.max_hypotheses,
+                max_evidence_items=settings.max_hypothesis_evidence_items,
+            )
         except Exception as e:
             log.exception("hypothesis rebuild failed")
             raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
@@ -3407,6 +3632,25 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return _model_dump_jsonable(plan)
+
+    @app.get("/runs/{thread_id}/advanced-intelligence-summary")
+    def run_advanced_intelligence_summary(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        run = run_repository.get_or_none(thread_id)
+        question = run.question if run is not None else ""
+        try:
+            summary = read_or_build_advanced_intelligence_summary(
+                td,
+                thread_id=thread_id,
+                question=question,
+            )
+        except Exception as e:
+            log.exception("advanced intelligence summary read failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        return _model_dump_jsonable(summary)
 
     @app.get("/runs/{thread_id}/artifacts/{rel_path:path}")
     def run_artifact_download(thread_id: str, rel_path: str):

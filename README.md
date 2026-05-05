@@ -26,6 +26,8 @@ traceable artifacts under `runs/<thread_id>/`.
   synthesis, verification, quality evaluation, and local SQLite memory.
 - Backend provenance artifacts for manifests, dependency DAGs, reproducibility reports, replay
   plans, and run-to-run artifact diffs. See `docs/provenance.md`.
+- Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
+  `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
 - Safety defaults for bounded source fetching, one-hop optional link expansion, URL validation,
   budget tracking, and high-stakes review recommendations.
@@ -95,12 +97,20 @@ PORT=8000
 MEMORY_ENABLED=true
 SOURCE_DISCOVERY_ENABLED=false
 SOURCE_DISCOVERY_PROVIDER=disabled
+SOURCE_SAFETY_ENABLED=true
+TEMPORAL_INTELLIGENCE_ENABLED=true
+QUANTITATIVE_INTELLIGENCE_ENABLED=true
+HYPOTHESIS_ENGINE_ENABLED=true
+PROVENANCE_ENABLED=true
 DOCUMENT_INTELLIGENCE_ENABLED=true
 RETRIEVAL_ENABLED=true
 EMBEDDING_PROVIDER=disabled
 VERIFICATION_ENABLED=true
 SYNTHESIS_ENABLED=true
 EVALUATION_ENABLED=true
+HIGH_RISK_SOURCE_POLICY=quote_high_exclude_critical
+MAX_HYPOTHESES=12
+MAX_HYPOTHESIS_EVIDENCE_ITEMS=6
 ```
 
 Source discovery is disabled by default and does not perform hidden live search. `mock` and
@@ -122,6 +132,7 @@ Most-used endpoints:
 - `GET /runs/{thread_id}/provenance`
 - `GET /runs/{thread_id}/reproducibility`
 - `GET /runs/{thread_id}/replay-plan`
+- `GET /runs/{thread_id}/advanced-intelligence-summary`
 - `POST /runs/diff`
 - `GET /runs/{thread_id}/events`
 - `GET /runs/{thread_id}/budget`
@@ -158,6 +169,18 @@ Hypothesis endpoints:
 - `GET /runs/{thread_id}/hypothesis-graph`
 - `GET /runs/{thread_id}/confidence-updates`
 
+Source safety endpoints:
+
+- `POST /source-safety/assess`
+- `GET /runs/{thread_id}/source-safety`
+
+Advanced summary endpoint:
+
+- `GET /runs/{thread_id}/advanced-intelligence-summary`
+
+See `docs/advanced-intelligence-pipeline.md` for the integrated backend-only lifecycle,
+source-safety isolation behavior, confidence penalties, provenance/replay metadata, and limitations.
+
 ## Temporal Intelligence
 
 The backend includes an offline-only temporal subsystem under
@@ -185,7 +208,8 @@ Hypothesis testing tracks supporting and opposing evidence, source diversity, so
 citation readiness, primary-source signals, freshness signals, contradictions, unresolved gaps, and
 confidence updates. Confidence is intentionally conservative: weak evidence, sensitive domains,
 missing primary sources, unresolved contradictions, and strong unsupported wording all reduce the
-posterior score.
+posterior score. Temporal staleness, high-risk source safety findings, unsupported numeric claims,
+and non-comparable quantitative comparisons also reduce confidence.
 
 Generated artifacts include `hypotheses.json`, `hypotheses.md`, `hypothesis_tests.json`,
 `hypothesis_tests.md`, `hypothesis_graph.json`, `hypothesis_graph.md`,
@@ -207,7 +231,8 @@ Each run writes artifacts under `runs/<thread_id>/`. Core artifacts include:
 Depending on enabled features, runs can also include strategy, protocol, source discovery,
 document profile, retrieval, context pack, memory, temporal profile, timeline, currentness,
 temporal claim, quantitative profile, numeric claim, table/CSV profile, quantitative comparison,
-evidence, hypothesis, verification, synthesis, evaluation, quality, and review artifacts.
+source safety, sanitized source, evidence, hypothesis, verification, synthesis, evaluation,
+advanced intelligence summary, provenance, replay, quality, and review artifacts.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

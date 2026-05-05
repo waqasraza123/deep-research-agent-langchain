@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import WarningSeverity
+
 DateType = Literal[
     "published",
     "updated",
@@ -52,9 +54,6 @@ ClaimTemporalStatus = Literal[
     "contradictory_dates",
     "unknown",
 ]
-
-WarningSeverity = Literal["info", "low", "medium", "high", "critical"]
-
 
 class ExtractedDate(BaseModel):
     raw_text: str
@@ -114,10 +113,15 @@ class SourceTemporalMetadata(BaseModel):
 
 
 class TemporalWarning(BaseModel):
+    subsystem: str = "temporal"
     warning_id: str
     severity: WarningSeverity = "medium"
+    code: str = "temporal.warning"
     category: str
     message: str
+    affected_artifacts: list[str] = Field(default_factory=list)
+    affected_sources: list[str] = Field(default_factory=list)
+    recommended_action: str = "Review source dates and avoid overstating currentness."
     source_id: str | None = None
     source_url: str | None = None
     claim_id: str | None = None

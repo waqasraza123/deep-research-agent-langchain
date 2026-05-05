@@ -134,11 +134,29 @@ def _add_canonical_stage_edges(
             "selected_candidates",
         ),
         ("artifact:source_candidates.json", "artifact:sources.json", "source_fetching"),
+        ("artifact:sources.json", "artifact:source_safety.json", "source_safety"),
         ("artifact:sources.json", "artifact:document_chunks.json", "document_intelligence"),
+        ("artifact:sources.json", "artifact:temporal_profile.json", "temporal_intelligence"),
+        (
+            "artifact:sources.json",
+            "artifact:quantitative_profile.json",
+            "quantitative_intelligence",
+        ),
         ("artifact:document_chunks.json", "artifact:context_packs.json", "retrieval"),
         ("artifact:context_packs.json", "artifact:report.md", "agent_context"),
         ("artifact:report.md", "artifact:verification_report.json", "verification"),
+        ("artifact:report.md", "artifact:hypotheses.json", "hypothesis_generation"),
+        (
+            "artifact:hypotheses.json",
+            "artifact:confidence_updates.json",
+            "confidence_update",
+        ),
         ("artifact:verification_report.json", "artifact:quality_score.json", "evaluation"),
+        (
+            "artifact:artifact_manifest.json",
+            "artifact:advanced_intelligence_summary.json",
+            "advanced_summary",
+        ),
     ]
     for source, target, relationship in stage_edges:
         if source in nodes and target in nodes:

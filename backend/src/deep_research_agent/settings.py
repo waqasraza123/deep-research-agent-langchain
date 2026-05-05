@@ -97,8 +97,20 @@ class Settings:
     synthesis_enabled: bool = True
     evaluation_enabled: bool = True
     verification_enabled: bool = True
+    hypothesis_engine_enabled: bool = True
+    temporal_intelligence_enabled: bool = True
+    source_safety_enabled: bool = True
+    quantitative_intelligence_enabled: bool = True
+    provenance_enabled: bool = True
     verification_gate_enabled: bool = False
     max_verification_tasks: int = 12
+    high_risk_source_policy: str = "quote_high_exclude_critical"
+    max_hypotheses: int = 12
+    max_hypothesis_evidence_items: int = 6
+    freshness_warning_threshold_days: int = 365
+    quantitative_extraction_enabled: bool = True
+    provenance_manifest_enabled: bool = True
+    replay_plan_enabled: bool = True
     confidence_threshold_for_review: float = 0.55
     benchmark_path: Path | None = None
     memory_stale_after_days: int = 30
@@ -262,11 +274,45 @@ class Settings:
             in ("1", "true", "yes"),
             verification_enabled=_env_str("VERIFICATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
+            hypothesis_engine_enabled=_env_str("HYPOTHESIS_ENGINE_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            temporal_intelligence_enabled=_env_str(
+                "TEMPORAL_INTELLIGENCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            source_safety_enabled=_env_str("SOURCE_SAFETY_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            quantitative_intelligence_enabled=_env_str(
+                "QUANTITATIVE_INTELLIGENCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            provenance_enabled=_env_str("PROVENANCE_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
             verification_gate_enabled=_env_str("VERIFICATION_GATE_ENABLED", "false").lower()
             in ("1", "true", "yes"),
             max_verification_tasks=_clamp_int(
                 _env_int("MAX_VERIFICATION_TASKS", 12), 0, 100
             ),
+            high_risk_source_policy=_env_str(
+                "HIGH_RISK_SOURCE_POLICY", "quote_high_exclude_critical"
+            ),
+            max_hypotheses=_clamp_int(_env_int("MAX_HYPOTHESES", 12), 1, 100),
+            max_hypothesis_evidence_items=_clamp_int(
+                _env_int("MAX_HYPOTHESIS_EVIDENCE_ITEMS", 6), 1, 50
+            ),
+            freshness_warning_threshold_days=_clamp_int(
+                _env_int("FRESHNESS_WARNING_THRESHOLD_DAYS", 365), 1, 3650
+            ),
+            quantitative_extraction_enabled=_env_str(
+                "QUANTITATIVE_EXTRACTION_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            provenance_manifest_enabled=_env_str(
+                "PROVENANCE_MANIFEST_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            replay_plan_enabled=_env_str("REPLAY_PLAN_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
             confidence_threshold_for_review=_env_float(
                 "CONFIDENCE_THRESHOLD_FOR_REVIEW", 0.55
             ),

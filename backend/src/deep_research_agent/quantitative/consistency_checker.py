@@ -158,8 +158,9 @@ def warnings_from_checks(
                     warning_id=_warning_id(check.status, check.message),
                     code=f"consistency_{check.status}",
                     message=check.message,
-                    severity="warning" if check.status == "warning" else "error",
+                    severity="medium" if check.status == "warning" else "high",
                     claim_id=check.claim_id,
+                    affected_artifacts=["quantitative_profile.json", "numeric_claims.json"],
                     context=check.observed_value.context if check.observed_value else "",
                 )
             )
@@ -170,8 +171,10 @@ def warnings_from_checks(
                     warning_id=_warning_id("benchmark_missing_context", value.raw_text),
                     code="benchmark_missing_context",
                     message=f"Benchmark-like value {value.raw_text} is missing metric context.",
-                    severity="warning",
+                    severity="medium",
                     source_id=value.source_id,
+                    affected_sources=[value.source_id] if value.source_id else [],
+                    affected_artifacts=["quantitative_profile.json"],
                     context=value.context,
                 )
             )
@@ -183,6 +186,8 @@ def warnings_from_checks(
                     message=f"Pricing value {value.raw_text} may need a billing unit.",
                     severity="info",
                     source_id=value.source_id,
+                    affected_sources=[value.source_id] if value.source_id else [],
+                    affected_artifacts=["quantitative_profile.json"],
                     context=value.context,
                 )
             )

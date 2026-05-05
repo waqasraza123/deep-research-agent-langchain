@@ -116,6 +116,24 @@ def confidence_update_for_hypothesis(
         score -= 0.06
         missing.append("Freshness-sensitive hypothesis lacks current/recent source signal.")
 
+    temporal_penalty, temporal_messages = _temporal_penalties(build_input, result, hypothesis)
+    if temporal_penalty:
+        score -= temporal_penalty
+        penalties.extend(temporal_messages)
+
+    quantitative_penalty, quantitative_messages = _quantitative_penalties(
+        build_input,
+        hypothesis,
+    )
+    if quantitative_penalty:
+        score -= quantitative_penalty
+        penalties.extend(quantitative_messages)
+
+    safety_penalty, safety_messages = _source_safety_penalties(build_input, result)
+    if safety_penalty:
+        score -= safety_penalty
+        penalties.extend(safety_messages)
+
     if sensitivity != "normal":
         score -= 0.08
         penalties.append(f"{sensitivity} domain requires conservative confidence.")
@@ -194,6 +212,111 @@ def _has_fresh_support(result: HypothesisTestResult) -> bool:
         if evidence.freshness_status in {"current", "recent"}:
             return True
     return False
+
+
+def _temporal_penalties(
+    build_input: HypothesisBuildInput,
+    result: HypothesisTestResult,
+    hypothesis: ResearchHypothesis,
+) -> tuple[float, list[str]]:
+    currentness = build_input.currentness_assessment or {}
+    if not currentness:
+        return 0.0, []
+    penalties: list[str] = []
+    score = 0.0
+    freshness_required = bool(currentness.get("freshness_required")) or bool(
+        _FRESHNESS_RE.search(hypothesis.text)
+    )
+    stale_sources = set(str(item) for item in currentness.get("stale_sources") or [])
+    unknown_sources = set(str(item) for item in currentness.get("unknown_date_sources") or [])
+    supporting_sources = set(result.supporting_source_ids)
+    if stale_sources & supporting_sources:
+        score += 0.08
+        penalties.append("Supporting evidence includes stale source(s).")
+    if freshness_required and unknown_sources & supporting_sources:
+        score += 0.06
+        penalties.append("Freshness-sensitive hypothesis relies on undated source(s).")
+    status = str(currentness.get("status") or "")
+    if freshness_required and status in {"stale", "possibly_stale", "unknown"}:
+        score += 0.04
+        penalties.append(f"Run currentness status is {status}.")
+    return min(score, 0.18), penalties
+
+
+def _quantitative_penalties(
+    build_input: HypothesisBuildInput,
+    hypothesis: ResearchHypothesis,
+) -> tuple[float, list[str]]:
+    profile = build_input.quantitative_profile or {}
+    evidence = profile.get("evidence") if isinstance(profile.get("evidence"), dict) else {}
+    warnings = profile.get("warnings") or (evidence or {}).get("warnings") or []
+    comparisons = (evidence or {}).get("comparisons") or []
+    numeric_claims = (evidence or {}).get("numeric_claims") or []
+    has_numbers = bool(re.search(r"\d", hypothesis.text))
+    consistency_failures = int(profile.get("consistency_failures") or 0)
+    score = 0.0
+    penalties: list[str] = []
+    if has_numbers and warnings:
+        score += 0.06
+        penalties.append("Quantitative warnings exist for numeric evidence.")
+    high_severity = any(
+        isinstance(warning, dict)
+        and str(warning.get("severity") or "").lower() in {"high", "critical", "error"}
+        for warning in warnings
+    )
+    if high_severity:
+        score += 0.04
+        penalties.append("High-severity quantitative warning affects the run.")
+    if consistency_failures:
+        score += min(0.08, consistency_failures * 0.04)
+        penalties.append("Quantitative consistency failures remain unresolved.")
+    if has_numbers and any(
+        isinstance(claim, dict) and claim.get("support_status") in {"unsupported", "warning"}
+        for claim in numeric_claims
+    ):
+        score += 0.08
+        penalties.append("Numeric claims include unsupported or warning status.")
+    if any(isinstance(item, dict) and item.get("comparable") is False for item in comparisons):
+        score += 0.06
+        penalties.append("At least one quantitative comparison is not apples-to-apples.")
+    return min(score, 0.16), penalties
+
+
+def _source_safety_penalties(
+    build_input: HypothesisBuildInput,
+    result: HypothesisTestResult,
+) -> tuple[float, list[str]]:
+    safety = build_input.source_safety or {}
+    assessments = safety.get("assessments") if isinstance(safety, dict) else []
+    if not isinstance(assessments, list):
+        return 0.0, []
+    by_source = {
+        str(item.get("source_id")): item
+        for item in assessments
+        if isinstance(item, dict) and item.get("source_id")
+    }
+    support_sources = set(result.supporting_source_ids)
+    high_risk = [
+        sid
+        for sid in support_sources
+        if str((by_source.get(sid) or {}).get("risk_score", {}).get("risk_level"))
+        in {"high", "critical"}
+    ]
+    excluded = [
+        sid
+        for sid in support_sources
+        if (by_source.get(sid) or {}).get("sanitized_content", {}).get("agent_context_allowed")
+        is False
+    ]
+    penalties: list[str] = []
+    score = 0.0
+    if high_risk:
+        score += 0.10
+        penalties.append("Supporting evidence includes high-risk source-safety finding(s).")
+    if excluded:
+        score += 0.12
+        penalties.append("Supporting evidence includes source(s) excluded from agent context.")
+    return min(score, 0.18), penalties
 
 
 def _update_id(hypothesis_id: str) -> str:

@@ -22,6 +22,11 @@ def test_settings_defaults_are_offline_constructible(tmp_path: Path):
     assert settings.orchestration_enabled is True
     assert settings.synthesis_enabled is True
     assert settings.evaluation_enabled is True
+    assert settings.hypothesis_engine_enabled is True
+    assert settings.temporal_intelligence_enabled is True
+    assert settings.source_safety_enabled is True
+    assert settings.quantitative_intelligence_enabled is True
+    assert settings.provenance_enabled is True
     assert settings.protocol_selection_enabled is True
     assert settings.intelligence_profile == "balanced_research"
     assert settings.source_discovery_enabled is False
@@ -37,6 +42,13 @@ def test_settings_defaults_are_offline_constructible(tmp_path: Path):
     assert settings.verification_enabled is True
     assert settings.verification_gate_enabled is False
     assert settings.max_verification_tasks == 12
+    assert settings.high_risk_source_policy == "quote_high_exclude_critical"
+    assert settings.max_hypotheses == 12
+    assert settings.max_hypothesis_evidence_items == 6
+    assert settings.freshness_warning_threshold_days == 365
+    assert settings.quantitative_extraction_enabled is True
+    assert settings.provenance_manifest_enabled is True
+    assert settings.replay_plan_enabled is True
     assert settings.confidence_threshold_for_review == 0.55
     assert settings.max_memory_results == 20
     assert settings.source_scoring_threshold == 0.45
@@ -72,8 +84,20 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
     monkeypatch.setenv("CONTEXT_PACK_MAX_CHARS", "5000")
     monkeypatch.setenv("VERIFICATION_ENABLED", "false")
+    monkeypatch.setenv("HYPOTHESIS_ENGINE_ENABLED", "false")
+    monkeypatch.setenv("TEMPORAL_INTELLIGENCE_ENABLED", "false")
+    monkeypatch.setenv("SOURCE_SAFETY_ENABLED", "false")
+    monkeypatch.setenv("QUANTITATIVE_INTELLIGENCE_ENABLED", "false")
+    monkeypatch.setenv("PROVENANCE_ENABLED", "false")
     monkeypatch.setenv("VERIFICATION_GATE_ENABLED", "true")
     monkeypatch.setenv("MAX_VERIFICATION_TASKS", "6")
+    monkeypatch.setenv("HIGH_RISK_SOURCE_POLICY", "exclude_high")
+    monkeypatch.setenv("MAX_HYPOTHESES", "9")
+    monkeypatch.setenv("MAX_HYPOTHESIS_EVIDENCE_ITEMS", "4")
+    monkeypatch.setenv("FRESHNESS_WARNING_THRESHOLD_DAYS", "90")
+    monkeypatch.setenv("QUANTITATIVE_EXTRACTION_ENABLED", "false")
+    monkeypatch.setenv("PROVENANCE_MANIFEST_ENABLED", "false")
+    monkeypatch.setenv("REPLAY_PLAN_ENABLED", "false")
     monkeypatch.setenv("CONFIDENCE_THRESHOLD_FOR_REVIEW", "0.72")
 
     settings = Settings.load()
@@ -100,7 +124,19 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     assert settings.embedding_provider == "mock"
     assert settings.context_pack_max_chars == 5000
     assert settings.verification_enabled is False
+    assert settings.hypothesis_engine_enabled is False
+    assert settings.temporal_intelligence_enabled is False
+    assert settings.source_safety_enabled is False
+    assert settings.quantitative_intelligence_enabled is False
+    assert settings.provenance_enabled is False
     assert settings.verification_gate_enabled is True
     assert settings.max_verification_tasks == 6
+    assert settings.high_risk_source_policy == "exclude_high"
+    assert settings.max_hypotheses == 9
+    assert settings.max_hypothesis_evidence_items == 4
+    assert settings.freshness_warning_threshold_days == 90
+    assert settings.quantitative_extraction_enabled is False
+    assert settings.provenance_manifest_enabled is False
+    assert settings.replay_plan_enabled is False
     assert settings.confidence_threshold_for_review == 0.72
     assert settings.default_budget().max_crawl_expansion == 2

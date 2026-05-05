@@ -215,7 +215,11 @@ def build_quantitative_evidence(
                     warning_id=f"{comparison.comparison_id}-warning",
                     code="comparison_incomparable",
                     message=message,
-                    severity="warning",
+                    severity="medium",
+                    affected_artifacts=[
+                        "quantitative_profile.json",
+                        "quantitative_comparisons.json",
+                    ],
                 )
             )
     return QuantitativeEvidence(

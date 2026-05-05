@@ -23,6 +23,7 @@ def refresh_provenance_artifacts(
     thread_id: str,
     *,
     run: Any | None = None,
+    replay_plan_enabled: bool = True,
 ) -> ProvenanceRecord:
     thread_dir = safe_run_dir(runs_dir, thread_id)
     _ensure_manifest_placeholders(thread_dir)
@@ -30,10 +31,11 @@ def refresh_provenance_artifacts(
     manifest = build_artifact_manifest(thread_dir, thread_id, run)
     graph = build_dependency_dag(manifest)
     reproducibility = build_reproducibility_report(manifest, run)
-    replay = build_replay_plan(manifest, reproducibility)
     write_dependency_dag(thread_dir, graph)
     write_reproducibility_report(thread_dir, reproducibility)
-    write_replay_plan(thread_dir, replay)
+    if replay_plan_enabled:
+        replay = build_replay_plan(manifest, reproducibility)
+        write_replay_plan(thread_dir, replay)
 
     final_manifest = build_artifact_manifest(thread_dir, thread_id, run)
     write_artifact_manifest(thread_dir, final_manifest)

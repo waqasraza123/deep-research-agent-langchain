@@ -28,16 +28,61 @@ HYPOTHESIS_ARTIFACTS = (
 )
 
 
-def rebuild_hypothesis_artifacts(run_dir: Path, *, thread_id: str) -> HypothesisSet:
+def rebuild_hypothesis_artifacts(
+    run_dir: Path,
+    *,
+    thread_id: str,
+    max_hypotheses: int | None = None,
+    max_evidence_items: int | None = None,
+) -> HypothesisSet:
     build_input = load_hypothesis_input(run_dir, thread_id=thread_id)
     hypothesis_set = generate_hypotheses(build_input)
+    if max_hypotheses is not None and max_hypotheses > 0:
+        hypothesis_set.hypotheses = hypothesis_set.hypotheses[:max_hypotheses]
+        hypothesis_set.summary.total_hypotheses = len(hypothesis_set.hypotheses)
     hypothesis_set = test_hypotheses(hypothesis_set, build_input, run_dir)
+    if max_evidence_items is not None and max_evidence_items > 0:
+        _limit_evidence_items(hypothesis_set, max_evidence_items)
     hypothesis_set = map_contradictions(hypothesis_set, build_input)
     hypothesis_set = update_confidences(hypothesis_set, build_input)
     hypothesis_set.summary = build_hypothesis_summary(hypothesis_set)
     hypothesis_set.graph = build_hypothesis_graph(hypothesis_set)
     write_hypothesis_artifacts(run_dir, hypothesis_set)
     return hypothesis_set
+
+
+def _limit_evidence_items(hypothesis_set: HypothesisSet, max_evidence_items: int) -> None:
+    for result in hypothesis_set.test_results:
+        result.supporting_evidence = result.supporting_evidence[:max_evidence_items]
+        result.opposing_evidence = result.opposing_evidence[:max_evidence_items]
+        result.neutral_evidence = result.neutral_evidence[:max_evidence_items]
+        result.supporting_source_ids = sorted(
+            {
+                evidence.source_id
+                for evidence in result.supporting_evidence
+                if evidence.source_id
+            }
+        )
+        result.opposing_source_ids = sorted(
+            {
+                evidence.source_id
+                for evidence in result.opposing_evidence
+                if evidence.source_id
+            }
+        )
+        result.source_diversity = len({*result.supporting_source_ids, *result.opposing_source_ids})
+    for hypothesis in hypothesis_set.hypotheses:
+        evidence_ids: list[str] = []
+        for result in hypothesis_set.test_results:
+            if result.hypothesis_id != hypothesis.hypothesis_id:
+                continue
+            for evidence in (
+                *result.supporting_evidence,
+                *result.opposing_evidence,
+                *result.neutral_evidence,
+            ):
+                evidence_ids.append(evidence.evidence_id)
+        hypothesis.evidence_ids = sorted(dict.fromkeys(evidence_ids))
 
 
 def write_hypothesis_artifacts(run_dir: Path, hypothesis_set: HypothesisSet) -> list[str]:

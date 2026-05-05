@@ -219,6 +219,28 @@ def producer_for_path(path: str) -> str:
         ),
         ("source_fetching", ("sources.json", "source_graph", "source_rankings", "source_warnings")),
         ("source_audit", ("source_audit", "citation_readiness")),
+        (
+            "source_safety",
+            (
+                "source_safety",
+                "prompt_injection",
+                "source_poisoning",
+                "sanitized_sources",
+                "trust_boundary",
+            ),
+        ),
+        ("temporal", ("temporal_", "timeline", "currentness")),
+        (
+            "quantitative",
+            (
+                "quantitative",
+                "numeric_claim",
+                "table_profiles",
+                "csv_profiles",
+            ),
+        ),
+        ("hypotheses", ("hypoth", "confidence_updates")),
+        ("advanced_summary", ("advanced_intelligence_summary",)),
         ("document_intelligence", ("document_", "chunks", "tables")),
         ("retrieval", ("retrieval_", "context_pack", "context_packs")),
         ("orchestration", ("task_graph", "stage_outputs", "orchestration")),
@@ -259,6 +281,53 @@ def infer_artifact_dependencies(path: str) -> list[ArtifactDependency]:
 
     if name in {"report.md", "synthesis.json", "synthesis.md"}:
         for dep in ("context_packs.json", "notes.md", "sources.json"):
+            add(dep)
+    if name.startswith("source_safety") or name.startswith("prompt_injection") or name.startswith(
+        "source_poisoning"
+    ) or name in {"sanitized_sources.json", "trust_boundary_policy.md"}:
+        add("sources.json")
+    if name.startswith("temporal_") or name in {
+        "timeline.json",
+        "timeline.md",
+        "currentness_assessment.json",
+        "currentness_assessment.md",
+        "temporal_warnings.md",
+    }:
+        for dep in ("sources.json", "report.md", "notes.md"):
+            add(dep)
+    if name.startswith("quantitative") or name in {
+        "numeric_claims.json",
+        "numeric_claims.md",
+        "table_profiles.json",
+        "csv_profiles.json",
+    }:
+        for dep in ("sources.json", "report.md", "notes.md", "document_tables.json"):
+            add(dep)
+    if (
+        name.startswith("hypoth")
+        or name == "confidence_updates.json"
+        or name == "confidence_updates.md"
+    ):
+        for dep in (
+            "sources.json",
+            "notes.md",
+            "report.md",
+            "evidence_ledger.json",
+            "source_audit.json",
+            "currentness_assessment.json",
+            "quantitative_profile.json",
+            "source_safety.json",
+        ):
+            add(dep)
+    if name.startswith("advanced_intelligence_summary"):
+        for dep in (
+            "source_safety.json",
+            "currentness_assessment.json",
+            "quantitative_profile.json",
+            "hypotheses.json",
+            "artifact_manifest.json",
+            "reproducibility_report.json",
+        ):
             add(dep)
     if "retrieval" in name or "context_pack" in name:
         for dep in ("document_chunks.json", "sources.json"):

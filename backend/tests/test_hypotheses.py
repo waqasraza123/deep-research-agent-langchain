@@ -162,6 +162,72 @@ def test_confidence_update_scoring():
     assert update.confidence_level in {"medium", "high", "very_high"}
 
 
+def test_confidence_adjusts_for_temporal_quantitative_and_safety_risks():
+    hypothesis = ResearchHypothesis(
+        hypothesis_id="H1",
+        text="ProductX currently has 99.9% uptime.",
+        normalized_text="productx currently has 99.9 uptime",
+        hypothesis_type=HypothesisType.TECHNICAL,
+        status=HypothesisStatus.SUPPORTED,
+    )
+    result = HypothesisTestResult(
+        result_id="HT1",
+        hypothesis_id="H1",
+        status=HypothesisStatus.SUPPORTED,
+        support_score=0.78,
+        supporting_source_ids=["S1"],
+        source_diversity=1,
+        primary_source_count=1,
+        citation_ready_count=1,
+    )
+
+    clean_update = confidence_update_for_hypothesis(
+        hypothesis,
+        result,
+        HypothesisBuildInput(
+            thread_id="t1",
+            question="Does ProductX currently have 99.9% uptime?",
+            generated_at="2026-05-05T00:00:00Z",
+        ),
+    )
+    risk_update = confidence_update_for_hypothesis(
+        hypothesis,
+        result,
+        HypothesisBuildInput(
+            thread_id="t1",
+            question="Does ProductX currently have 99.9% uptime?",
+            generated_at="2026-05-05T00:00:00Z",
+            currentness_assessment={
+                "freshness_required": True,
+                "status": "stale",
+                "stale_sources": ["S1"],
+            },
+            quantitative_profile={
+                "warnings": [{"severity": "high", "message": "Unsupported numeric claim"}],
+                "consistency_failures": 1,
+                "evidence": {
+                    "numeric_claims": [{"support_status": "unsupported"}],
+                    "comparisons": [{"comparable": False}],
+                },
+            },
+            source_safety={
+                "assessments": [
+                    {
+                        "source_id": "S1",
+                        "risk_score": {"risk_level": "high"},
+                        "sanitized_content": {"agent_context_allowed": False},
+                    }
+                ]
+            },
+        ),
+    )
+
+    assert risk_update.posterior_score < clean_update.posterior_score
+    assert any("stale" in penalty.lower() for penalty in risk_update.penalties)
+    assert any("source-safety" in penalty.lower() for penalty in risk_update.penalties)
+    assert any("quantitative" in penalty.lower() for penalty in risk_update.penalties)
+
+
 def test_low_confidence_behavior_when_sources_are_weak(tmp_path: Path):
     run_dir = tmp_path / "runs" / "weak"
     run_dir.mkdir(parents=True)

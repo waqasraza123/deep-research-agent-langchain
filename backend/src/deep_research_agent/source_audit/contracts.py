@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from deep_research_agent.source_identity import SourceIdentity
+from deep_research_agent.source_identity import SourceIdentity, WarningSeverity
 
 RecommendedUsage = Literal[
     "cite_directly",
@@ -16,14 +16,17 @@ RecommendedUsage = Literal[
 
 FreshnessStatus = Literal["current", "recent", "possibly_stale", "stale", "unknown"]
 BiasRiskLevel = Literal["low", "medium", "high"]
-WarningSeverity = Literal["info", "low", "medium", "high"]
 SourceRole = Literal["primary", "secondary", "weak", "unknown"]
 
 
 class SourceAuditWarning(BaseModel):
+    subsystem: str = "source_audit"
     code: str
     severity: WarningSeverity = "low"
     message: str
+    affected_artifacts: list[str] = Field(default_factory=list)
+    affected_sources: list[str] = Field(default_factory=list)
+    recommended_action: str = "Review source before citing."
 
 
 class SourceCredibilityScore(BaseModel):

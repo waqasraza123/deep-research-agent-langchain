@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import WarningSeverity
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -26,9 +28,6 @@ NumericKind = Literal[
     "date",
     "version",
 ]
-
-WarningSeverity = Literal["info", "warning", "error"]
-
 
 class NumericValue(BaseModel):
     raw_text: str
@@ -176,10 +175,14 @@ class CalculationResult(BaseModel):
 
 
 class QuantitativeWarning(BaseModel):
+    subsystem: str = "quantitative"
     warning_id: str
     code: str
     message: str
-    severity: WarningSeverity = "warning"
+    severity: WarningSeverity = WarningSeverity.MEDIUM
+    affected_artifacts: list[str] = Field(default_factory=list)
+    affected_sources: list[str] = Field(default_factory=list)
+    recommended_action: str = "Review numeric evidence and source context."
     source_id: str | None = None
     claim_id: str | None = None
     context: str = ""
