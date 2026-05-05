@@ -16,6 +16,15 @@ def test_settings_defaults_are_offline_constructible(tmp_path: Path):
     assert settings.default_max_links_per_source == 0
     assert settings.allow_mock_fallback is False
     assert settings.review_gate_default is False
+    assert settings.memory_enabled is True
+    assert settings.source_reuse_enabled is True
+    assert settings.source_audit_enabled is True
+    assert settings.orchestration_enabled is True
+    assert settings.synthesis_enabled is True
+    assert settings.evaluation_enabled is True
+    assert settings.max_memory_results == 20
+    assert settings.source_scoring_threshold == 0.45
+    assert settings.evaluation_threshold == 0.65
     assert settings.evidence_citation_threshold == 0.34
     assert settings.max_page_chars > 0
     assert settings.http_timeout_s > 0
@@ -32,6 +41,8 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("DEFAULT_FOLLOW_LINKS", "true")
     monkeypatch.setenv("DEFAULT_MAX_LINKS_PER_SOURCE", "3")
     monkeypatch.setenv("REVIEW_GATE_DEFAULT", "true")
+    monkeypatch.setenv("MEMORY_ENABLED", "false")
+    monkeypatch.setenv("MAX_MEMORY_RESULTS", "7")
 
     settings = Settings.load()
 
@@ -40,4 +51,6 @@ def test_settings_load_accepts_mock_provider(monkeypatch, tmp_path: Path):
     assert settings.default_follow_links is True
     assert settings.default_max_links_per_source == 3
     assert settings.review_gate_default is True
+    assert settings.memory_enabled is False
+    assert settings.max_memory_results == 7
     assert settings.default_budget().max_crawl_expansion == 2

@@ -71,7 +71,17 @@ class Settings:
 
     runs_dir: Path = REPO_ROOT / "runs"
     memory_data_dir: Path | None = None
+    memory_enabled: bool = True
+    source_reuse_enabled: bool = True
+    source_audit_enabled: bool = True
+    orchestration_enabled: bool = True
+    synthesis_enabled: bool = True
+    evaluation_enabled: bool = True
+    benchmark_path: Path | None = None
     memory_stale_after_days: int = 30
+    max_memory_results: int = 20
+    source_scoring_threshold: float = 0.45
+    evaluation_threshold: float = 0.65
     checkpoint_path: Path | None = None
     max_page_chars: int = 15_000
     http_timeout_s: float = 20.0
@@ -121,6 +131,7 @@ class Settings:
         http_timeout_s = _env_float("HTTP_TIMEOUT_S", 20.0)
         runs_dir = REPO_ROOT / "runs"
         memory_data_dir_raw = _env_str("MEMORY_DATA_DIR", "")
+        benchmark_path_raw = _env_str("BENCHMARK_PATH", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
 
         return Settings(
@@ -151,9 +162,26 @@ class Settings:
             memory_data_dir=Path(memory_data_dir_raw)
             if memory_data_dir_raw
             else runs_dir / "_memory",
+            memory_enabled=_env_str("MEMORY_ENABLED", "true").lower() in ("1", "true", "yes"),
+            source_reuse_enabled=_env_str("SOURCE_REUSE_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            source_audit_enabled=_env_str("SOURCE_AUDIT_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            orchestration_enabled=_env_str("ORCHESTRATION_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            synthesis_enabled=_env_str("SYNTHESIS_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            evaluation_enabled=_env_str("EVALUATION_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            benchmark_path=Path(benchmark_path_raw)
+            if benchmark_path_raw
+            else REPO_ROOT / "benchmarks",
             memory_stale_after_days=_clamp_int(
                 _env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650
             ),
+            max_memory_results=_clamp_int(_env_int("MAX_MEMORY_RESULTS", 20), 1, 500),
+            source_scoring_threshold=_env_float("SOURCE_SCORING_THRESHOLD", 0.45),
+            evaluation_threshold=_env_float("EVALUATION_THRESHOLD", 0.65),
             checkpoint_path=Path(checkpoint_path_raw)
             if checkpoint_path_raw
             else runs_dir / "checkpoints.sqlite",

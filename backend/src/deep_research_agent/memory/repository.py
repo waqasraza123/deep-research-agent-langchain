@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from deep_research_agent.source_identity import SourceIdentity
+
 from .contracts import ArtifactReference, ExtractedEntity, ExtractedTopic, MemoryRecord
 
 
@@ -70,6 +72,8 @@ class MemoryRepository:
                     question TEXT NOT NULL,
                     normalized_question TEXT NOT NULL,
                     source_url TEXT NOT NULL,
+                    source_id TEXT,
+                    source_identity_json TEXT,
                     normalized_url TEXT NOT NULL,
                     canonical_url TEXT,
                     source_title TEXT,
@@ -93,6 +97,8 @@ class MemoryRepository:
                 "CREATE INDEX IF NOT EXISTS idx_memories_normalized_url "
                 "ON memories(normalized_url)"
             )
+            self._ensure_column(conn, "source_id", "TEXT")
+            self._ensure_column(conn, "source_identity_json", "TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_canonical_url "
                 "ON memories(canonical_url)"
@@ -129,16 +135,18 @@ class MemoryRepository:
                 """
                 INSERT INTO memories (
                     memory_id, thread_id, question, normalized_question, source_url,
-                    normalized_url, canonical_url, source_title, source_domain, content_hash,
-                    extracted_text_hash, source_type, first_seen_at, last_seen_at, run_count,
-                    quality_score, entities_json, topics_json, summary, warnings_json,
-                    artifacts_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_id, source_identity_json, normalized_url, canonical_url, source_title,
+                    source_domain, content_hash, extracted_text_hash, source_type, first_seen_at,
+                    last_seen_at, run_count, quality_score, entities_json, topics_json, summary,
+                    warnings_json, artifacts_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     thread_id=excluded.thread_id,
                     question=excluded.question,
                     normalized_question=excluded.normalized_question,
                     source_url=excluded.source_url,
+                    source_id=excluded.source_id,
+                    source_identity_json=excluded.source_identity_json,
                     normalized_url=excluded.normalized_url,
                     canonical_url=excluded.canonical_url,
                     source_title=excluded.source_title,
@@ -167,6 +175,11 @@ class MemoryRepository:
                 "SELECT * FROM memories ORDER BY last_seen_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
+
+    def _ensure_column(self, conn: sqlite3.Connection, column: str, ddl_type: str) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {column} {ddl_type}")
 
     def search(self, query: str, *, limit: int = 20) -> list[MemoryRecord]:
         normalized = normalize_question(query)
@@ -303,6 +316,10 @@ class MemoryRepository:
             record.question,
             record.normalized_question,
             record.source_url,
+            record.source_id,
+            _json_dumps(_model_dump_jsonable(record.source_identity))
+            if record.source_identity
+            else None,
             record.normalized_url,
             record.canonical_url,
             record.source_title,
@@ -343,6 +360,14 @@ class MemoryRepository:
             question=row["question"],
             normalized_question=row["normalized_question"],
             source_url=row["source_url"],
+            source_id=row["source_id"] if "source_id" in row.keys() else None,
+            source_identity=(
+                SourceIdentity(**_json_loads(row["source_identity_json"], {}))
+                if row["source_identity_json"]
+                else None
+            )
+            if "source_identity_json" in row.keys()
+            else None,
             normalized_url=row["normalized_url"],
             canonical_url=row["canonical_url"],
             source_title=row["source_title"],

@@ -27,6 +27,7 @@ from .evaluation.contracts import model_to_plain as evaluation_model_to_plain
 from .evaluation.regression_runner import run_regression_suite
 from .evidence import rebuild_evidence_artifacts
 from .intelligence import ResearchStrategy, create_research_strategy
+from .intelligence_summary import rebuild_intelligence_summary_artifacts
 from .logging_config import configure_logging
 from .memory import (
     ArtifactReference,
@@ -71,6 +72,7 @@ from .source_audit import (
     write_source_audit_artifacts,
 )
 from .source_audit.contracts import model_to_plain
+from .source_identity import source_identity_from_dict
 from .source_intelligence import CrawlBudgetStats, CrawlResult, SourceRecord, crawl_sources
 from .source_intelligence.dedupe import content_hash, normalize_url
 from .source_intelligence.source_graph import write_source_graph_artifacts, write_sources_manifest
@@ -173,6 +175,15 @@ def _read_json_artifact(td, rel_path: str) -> dict[str, Any]:
     return loaded
 
 
+def _load_json_file(path) -> Any:
+    try:
+        if not path.exists() or path.is_dir():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _memory_data_dir(settings: Settings):
     return settings.memory_data_dir or settings.runs_dir / "_memory"
 
@@ -223,6 +234,7 @@ def _memory_record_from_source(
         return None
 
     source_url = source.final_url or source.url
+    identity = source_identity_from_dict(source.to_dict())
     normalized = source.normalized_url or normalize_url(source_url)
     canonical = normalize_url(source.canonical_url) if source.canonical_url else None
     text_hash = content_hash(text)
@@ -264,6 +276,8 @@ def _memory_record_from_source(
         question=question,
         normalized_question=normalize_question(question),
         source_url=source_url,
+        source_id=identity.source_id,
+        source_identity=identity,
         normalized_url=normalized,
         canonical_url=canonical,
         source_title=source.title,
@@ -680,6 +694,28 @@ def _try_rebuild_evaluation(
         )
 
 
+def _try_rebuild_intelligence_summary(
+    *,
+    settings: Settings,
+    td,
+    thread_id: str,
+    warnings: list[str],
+    run_context: RunContext | None = None,
+) -> None:
+    try:
+        rebuild_intelligence_summary_artifacts(td, runs_dir=settings.runs_dir, thread_id=thread_id)
+    except Exception as e:
+        log.exception("intelligence summary rebuild failed")
+        warnings.append(
+            f"Intelligence summary artifacts were not generated: {type(e).__name__}: {e}"
+        )
+        return
+    if run_context:
+        for rel_path in ("intelligence_summary.json", "intelligence_summary.md"):
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+
+
 def _write_audit_for_sources(
     *,
     thread_dir,
@@ -936,6 +972,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         f"Synthesis artifacts were not generated: {type(e).__name__}: {e}"
                     )
                 _try_rebuild_evaluation(td, thread_id, warnings, run_context)
+                _try_rebuild_intelligence_summary(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=warnings,
+                    run_context=run_context,
+                )
                 run_context.budget_warning()
                 run_context.log("run_completed", message="mock run completed", metadata=metadata)
                 run_repository.set_warnings(thread_id, warnings)
@@ -948,6 +991,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     require_review=require_review,
                     summary="[MOCK OUTPUT] Deterministic offline run completed.",
                 )
+                _try_rebuild_intelligence_summary(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=warnings,
+                    run_context=run_context,
+                )
+                run_repository.refresh_artifacts(thread_id)
                 return {
                     "thread_id": thread_id,
                     "summary": "[MOCK OUTPUT] Deterministic offline run completed.",
@@ -1147,6 +1198,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         f"{type(synthesis_error).__name__}: {synthesis_error}"
                     )
                 _try_rebuild_evaluation(td, thread_id, fallback_warnings, run_context)
+                _try_rebuild_intelligence_summary(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=fallback_warnings,
+                    run_context=run_context,
+                )
                 run_repository.set_warnings(thread_id, fallback_warnings)
                 run_repository.refresh_artifacts(thread_id)
                 run_repository.set_output_summary(
@@ -1157,6 +1215,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     require_review=require_review,
                     summary=("[MOCK OUTPUT] Explicit mock fallback completed after model failure."),
                 )
+                _try_rebuild_intelligence_summary(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=fallback_warnings,
+                    run_context=run_context,
+                )
+                run_repository.refresh_artifacts(thread_id)
                 fallback_summary = (
                     "[MOCK OUTPUT] Explicit mock fallback completed after model failure."
                 )
@@ -1215,6 +1281,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             log.exception("synthesis rebuild failed")
             warnings.append(f"Synthesis artifacts were not generated: {type(e).__name__}: {e}")
         _try_rebuild_evaluation(td, thread_id, warnings, run_context)
+        _try_rebuild_intelligence_summary(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            warnings=warnings,
+            run_context=run_context,
+        )
         for artifact in list_artifacts(settings.runs_dir, thread_id):
             run_context.artifact_written(artifact.path, artifact.size_bytes)
         run_context.budget_warning()
@@ -1225,6 +1298,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             thread_id, budget_summary=read_budget_file(td / "budget.json")
         )
         lifecycle.complete(require_review=require_review, summary=summary_text)
+        _try_rebuild_intelligence_summary(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            warnings=warnings,
+            run_context=run_context,
+        )
+        run_repository.refresh_artifacts(thread_id)
 
         return {
             "thread_id": thread_id,
@@ -1351,6 +1432,44 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=400, detail=str(e)) from e
         if not path.exists():
             raise HTTPException(status_code=404, detail="Evaluation not found")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @app.get("/runs/{thread_id}/synthesis")
+    def synthesis_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "synthesis_output.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Synthesis output not found")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @app.get("/runs/{thread_id}/memory")
+    def run_memory_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        context = _load_json_file(td / "memory_context.json")
+        graph = _load_json_file(td / "memory_graph.json")
+        records = memory_repository.records_for_thread(thread_id)
+        if context is None and graph is None and not records:
+            raise HTTPException(status_code=404, detail="Memory artifacts not found")
+        return {
+            "thread_id": thread_id,
+            "context": context,
+            "graph": graph,
+            "records": [_model_dump_jsonable(record) for record in records],
+        }
+
+    @app.get("/runs/{thread_id}/intelligence-summary")
+    def intelligence_summary_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "intelligence_summary.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Intelligence summary not found")
         return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/runs/{thread_id}/quality-score")

@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import SourceIdentity
+
 
 class EntityType(str, Enum):
     PERSON = "person"
@@ -53,6 +55,8 @@ class MemoryRecord(BaseModel):
     question: str
     normalized_question: str
     source_url: str
+    source_id: str | None = None
+    source_identity: SourceIdentity | None = None
     normalized_url: str
     canonical_url: str | None = None
     source_title: str | None = None

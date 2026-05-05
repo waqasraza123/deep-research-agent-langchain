@@ -274,6 +274,8 @@ def test_source_graph_artifacts_include_skipped_unsafe_links(tmp_path: Path):
     assert (tmp_path / "source_graph.md").exists()
     assert graph["root_urls"] == [root]
     assert graph["budget"]["fetched_count"] == 2
+    assert graph["fetched_links"][0]["source_identity"]["source_id"].startswith("S")
+    assert graph["fetched_links"][0]["source_identity"]["normalized_url"] == root
     assert any("unsafe_url" in item["skip_reason"] for item in graph["skipped_links"])
     assert any(
         source.parent_url == root

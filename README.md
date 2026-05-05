@@ -95,9 +95,16 @@ Intelligence and traceability artifacts:
 - `hallucination_risk.md`
 - `quality_score.json`
 - `quality_score.md`
+- `intelligence_summary.json`
+- `intelligence_summary.md`
 - `events.jsonl`
 - `events.md`
 - `budget.json`
+
+Fetched source manifests use a stable `source_identity` object where possible. It includes
+`source_id`, `url`, `canonical_url`, `normalized_url`, `domain`, `title`, `content_hash`,
+`source_kind`, `parent_url`, and `fetched_at`, so memory, source audit, synthesis, and evaluation
+can refer to the same source consistently.
 
 Fetched source text and metadata live under `runs/<thread_id>/sources/`.
 
@@ -323,6 +330,27 @@ OPENAI_BASE_URL=http://localhost:8080/v1
 OPENAI_MODEL=local-model
 ```
 
+Backend intelligence feature flags default to enabled and remain offline/deterministic unless the
+model provider itself is remote:
+
+```bash
+MEMORY_ENABLED=true
+SOURCE_REUSE_ENABLED=true
+SOURCE_AUDIT_ENABLED=true
+ORCHESTRATION_ENABLED=true
+SYNTHESIS_ENABLED=true
+EVALUATION_ENABLED=true
+MAX_MEMORY_RESULTS=20
+SOURCE_SCORING_THRESHOLD=0.45
+EVALUATION_THRESHOLD=0.65
+BENCHMARK_PATH=backend/benchmarks
+```
+
+`intelligence_summary.json` and `intelligence_summary.md` are generated at the end of a run as the
+operator-facing rollup across memory, orchestration, source audit, synthesis, and evaluation. They
+summarize top sources, warnings, coverage gaps, hallucination risk, generated artifacts, and
+recommended follow-up actions.
+
 ## API
 
 Useful endpoints:
@@ -342,14 +370,17 @@ Useful endpoints:
 - `GET /runs/{thread_id}/artifacts/{artifact_name}`
 - `GET /runs/{thread_id}/events`
 - `GET /runs/{thread_id}/budget`
+- `GET /runs/{thread_id}/memory`
 - `POST /source-audit`
 - `GET /runs/{thread_id}/source-audit`
 - `GET /runs/{thread_id}/citation-readiness`
 - `POST /runs/{thread_id}/evidence/rebuild`
 - `POST /runs/{thread_id}/synthesis/rebuild`
+- `GET /runs/{thread_id}/synthesis`
 - `POST /runs/{thread_id}/evaluation/rebuild`
 - `GET /runs/{thread_id}/evaluation`
 - `GET /runs/{thread_id}/quality-score`
+- `GET /runs/{thread_id}/intelligence-summary`
 - `POST /benchmarks/run`
 - `GET /benchmarks/cases`
 - `GET /runs/{thread_id}/argument-map`

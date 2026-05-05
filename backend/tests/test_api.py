@@ -111,7 +111,17 @@ def test_mock_run_writes_intelligent_artifacts_and_public_run_snapshot(client):
     assert "source_graph.md" in paths
     assert "evidence_ledger.json" in paths
     assert "evidence_coverage.json" in paths
+    assert "intelligence_summary.json" in paths
+    assert "intelligence_summary.md" in paths
 
     run_snapshot = client.get(f"/runs/{tid}/artifacts/run.json")
     assert run_snapshot.status_code == 200
     assert run_snapshot.json()["thread_id"] == tid
+
+    for rel in ("memory", "task-graph", "source-audit", "synthesis", "evaluation"):
+        endpoint = client.get(f"/runs/{tid}/{rel}")
+        assert endpoint.status_code == 200
+
+    summary = client.get(f"/runs/{tid}/intelligence-summary")
+    assert summary.status_code == 200
+    assert summary.json()["thread_id"] == tid

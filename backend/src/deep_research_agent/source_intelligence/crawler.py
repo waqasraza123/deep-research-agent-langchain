@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from deep_research_agent.source_identity import source_domain
 from deep_research_agent.tools import FetchResult, fetch_document
 
 from .contracts import CrawlBudgetStats, CrawlResult, CrawlSettings, PrioritizedLink, SourceRecord
@@ -62,6 +63,10 @@ def _source_record_from_fetch(
         priority_reasons=priority.reasons if priority else (),
         discovered_anchor_text=priority.candidate.anchor_text if priority else "",
         quality_score=score_source(result),
+        source_domain=source_domain(result.final_url or result.url),
+        content_hash=hashlib.sha1(
+            " ".join((result.extracted_text or "").strip().lower().split()).encode("utf-8")
+        ).hexdigest(),
     )
 
 
