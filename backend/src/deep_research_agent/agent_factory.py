@@ -55,7 +55,7 @@ class AgentService:
         follow_links: bool = False,
         run_context: RunContext | None = None,
     ):
-        max_sources = max(0, min(int(max_sources), 3))
+        max_sources = max(0, min(int(max_sources), 20))
         max_links_per_source = max(0, min(int(max_links_per_source), 10))
         follow_links = bool(follow_links and max_links_per_source > 0)
         effective_source_limit = max_sources

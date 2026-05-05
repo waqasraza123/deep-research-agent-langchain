@@ -74,9 +74,20 @@ class Settings:
     memory_enabled: bool = True
     source_reuse_enabled: bool = True
     source_audit_enabled: bool = True
+    source_discovery_enabled: bool = False
+    source_discovery_provider: str = "disabled"
+    source_discovery_max_queries: int = 8
+    source_discovery_max_candidates_per_query: int = 5
+    source_discovery_max_selected_sources: int = 3
+    source_discovery_allow_secondary_sources: bool = True
+    source_discovery_allow_forums: bool = False
+    source_discovery_require_primary: bool = True
+    source_discovery_freshness_required: bool | None = None
     orchestration_enabled: bool = True
     synthesis_enabled: bool = True
     evaluation_enabled: bool = True
+    verification_enabled: bool = True
+    verification_gate_enabled: bool = False
     benchmark_path: Path | None = None
     memory_stale_after_days: int = 30
     max_memory_results: int = 20
@@ -167,11 +178,48 @@ class Settings:
             in ("1", "true", "yes"),
             source_audit_enabled=_env_str("SOURCE_AUDIT_ENABLED", "true").lower()
             in ("1", "true", "yes"),
+            source_discovery_enabled=_env_str("SOURCE_DISCOVERY_ENABLED", "false").lower()
+            in ("1", "true", "yes"),
+            source_discovery_provider=_env_str("SOURCE_DISCOVERY_PROVIDER", "disabled").lower(),
+            source_discovery_max_queries=_clamp_int(
+                _env_int("SOURCE_DISCOVERY_MAX_QUERIES", 8), 0, 20
+            ),
+            source_discovery_max_candidates_per_query=_clamp_int(
+                _env_int("SOURCE_DISCOVERY_MAX_CANDIDATES_PER_QUERY", 5), 0, 20
+            ),
+            source_discovery_max_selected_sources=_clamp_int(
+                _env_int("SOURCE_DISCOVERY_MAX_SELECTED_SOURCES", 3), 0, 20
+            ),
+            source_discovery_allow_secondary_sources=_env_str(
+                "SOURCE_DISCOVERY_ALLOW_SECONDARY_SOURCES", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            source_discovery_allow_forums=_env_str(
+                "SOURCE_DISCOVERY_ALLOW_FORUMS", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            source_discovery_require_primary=_env_str(
+                "SOURCE_DISCOVERY_REQUIRE_PRIMARY", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            source_discovery_freshness_required=(
+                True
+                if _env_str("SOURCE_DISCOVERY_FRESHNESS_REQUIRED", "").lower()
+                in ("1", "true", "yes")
+                else False
+                if _env_str("SOURCE_DISCOVERY_FRESHNESS_REQUIRED", "").lower()
+                in ("0", "false", "no")
+                else None
+            ),
             orchestration_enabled=_env_str("ORCHESTRATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             synthesis_enabled=_env_str("SYNTHESIS_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             evaluation_enabled=_env_str("EVALUATION_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            verification_enabled=_env_str("VERIFICATION_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            verification_gate_enabled=_env_str("VERIFICATION_GATE_ENABLED", "false").lower()
             in ("1", "true", "yes"),
             benchmark_path=Path(benchmark_path_raw)
             if benchmark_path_raw

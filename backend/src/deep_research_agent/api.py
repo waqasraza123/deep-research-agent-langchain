@@ -21,6 +21,15 @@ from .artifacts import (
     list_artifacts,
     write_strategy_artifacts,
 )
+from .document_intelligence import (
+    build_document_context_block,
+    build_document_intelligence_batch,
+    profile_document,
+    write_document_intelligence_artifacts,
+)
+from .document_intelligence import (
+    model_to_plain as document_model_to_plain,
+)
 from .evaluation import EVALUATION_ARTIFACTS, rebuild_evaluation_artifacts
 from .evaluation.benchmark import list_benchmark_cases
 from .evaluation.contracts import model_to_plain as evaluation_model_to_plain
@@ -44,6 +53,28 @@ from .memory.repository import normalize_question, now_iso_utc, source_domain
 from .model import create_chat_model
 from .orchestration import OrchestrationExecutor
 from .orchestration.artifact_writer import read_orchestration_json
+from .protocols import (
+    ProtocolRegistry,
+    built_in_profiles,
+    select_protocol,
+    write_protocol_artifacts,
+)
+from .protocols import (
+    model_to_plain as protocol_model_to_plain,
+)
+from .protocols.errors import ProtocolError
+from .retrieval import (
+    RETRIEVAL_ARTIFACTS,
+    HybridRankingConfig,
+    build_retrieval_index,
+    plan_retrieval_queries,
+    rank_retrieval_results,
+    rebuild_retrieval_artifacts,
+    render_agent_context_block,
+)
+from .retrieval import (
+    model_to_plain as retrieval_model_to_plain,
+)
 from .runs.cleanup import apply_cleanup_plan, build_cleanup_plan
 from .runs.contracts import ReviewState, RunCancellationRequest, RunStatus, model_to_dict
 from .runs.lifecycle import RunLifecycle
@@ -71,12 +102,30 @@ from .source_audit import (
     audit_sources_from_manifest,
     write_source_audit_artifacts,
 )
-from .source_audit.contracts import model_to_plain
+from .source_audit.contracts import model_to_plain as source_audit_model_to_plain
+from .source_discovery import (
+    SourceDiscoveryRequest,
+    SourceDiscoverySettings,
+    build_acquisition_plan,
+    execute_source_discovery,
+    write_source_discovery_artifacts,
+)
+from .source_discovery import (
+    model_to_plain as discovery_model_to_plain,
+)
 from .source_identity import source_identity_from_dict
 from .source_intelligence import CrawlBudgetStats, CrawlResult, SourceRecord, crawl_sources
 from .source_intelligence.dedupe import content_hash, normalize_url
 from .source_intelligence.source_graph import write_source_graph_artifacts, write_sources_manifest
 from .synthesis import SYNTHESIS_ARTIFACTS, rebuild_synthesis_artifacts
+from .verification import (
+    VERIFICATION_ARTIFACTS,
+    VerificationConfig,
+    rebuild_verification_artifacts,
+)
+from .verification import (
+    model_to_plain as verification_model_to_plain,
+)
 
 log = logging.getLogger("deep_research_agent.api")
 
@@ -87,13 +136,24 @@ class RunRequest(BaseModel):
     thread_id: str | None = None
     generate_strategy: bool = True
     require_review: bool | None = None
+    protocol_id: str | None = None
+    intelligence_profile_id: str | None = None
 
-    max_sources: int = Field(default=1, ge=0, le=3)
+    max_sources: int | None = Field(default=None, ge=0, le=20)
     max_links_per_source: int | None = Field(default=None, ge=0, le=10)
     follow_links: bool | None = None
     mock_mode: bool = False
     allow_mock_fallback: bool = False
     budget: RunBudget | None = None
+    source_discovery: SourceDiscoverySettings | None = None
+
+
+class ProtocolSelectRequest(BaseModel):
+    question: str = Field(..., min_length=5)
+    urls: list[str] = Field(default_factory=list)
+    protocol_id: str | None = None
+    intelligence_profile_id: str | None = None
+    mock_mode: bool = False
 
 
 class PlanRequest(BaseModel):
@@ -133,6 +193,28 @@ class SourceAuditRequest(BaseModel):
     thread_id: str | None = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
     persist: bool = True
+
+
+class RetrievalSearchRequest(BaseModel):
+    thread_id: str
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=10, ge=1, le=50)
+    rebuild_if_missing: bool = True
+
+
+class SourceDiscoveryPreviewRequest(SourceDiscoveryRequest):
+    persist: bool = False
+
+
+class DocumentProfileRequest(BaseModel):
+    raw_text: str = Field(..., min_length=0)
+    source: dict[str, Any] = Field(default_factory=dict)
+    source_id: str | None = None
+    url: str = ""
+    title: str | None = None
+    source_type: str = "unknown"
+    thread_id: str | None = None
+    persist: bool = False
 
 
 def _safe_local_rel(local_path: str) -> str | None:
@@ -198,6 +280,76 @@ def _model_dump_jsonable(model: Any) -> dict[str, Any]:
     return model.dict()
 
 
+def _source_discovery_settings(
+    settings: Settings, override: SourceDiscoverySettings | None
+) -> SourceDiscoverySettings:
+    if override is not None:
+        return override
+    provider = settings.source_discovery_provider
+    if provider not in {"mock", "static", "disabled"}:
+        provider = "disabled"
+    return SourceDiscoverySettings(
+        discovery_enabled=settings.source_discovery_enabled,
+        provider=provider,  # type: ignore[arg-type]
+        max_queries=settings.source_discovery_max_queries,
+        max_candidates_per_query=settings.source_discovery_max_candidates_per_query,
+        max_selected_sources=settings.source_discovery_max_selected_sources,
+        require_primary_source_when_possible=settings.source_discovery_require_primary,
+        allow_secondary_sources=settings.source_discovery_allow_secondary_sources,
+        allow_forums=settings.source_discovery_allow_forums,
+        freshness_required=settings.source_discovery_freshness_required,
+    )
+
+
+def _merge_source_urls(user_urls: list[str], discovered_urls: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for url in [*user_urls, *discovered_urls]:
+        normalized = normalize_url(url) if url.startswith(("http://", "https://")) else url
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(url)
+    return merged
+
+
+def _discovery_provenance(batch) -> dict[str, dict[str, Any]]:
+    provenance: dict[str, dict[str, Any]] = {}
+    for candidate in batch.selected_candidates:
+        key = normalize_url(candidate.url)
+        provenance[key] = {
+            "source_kind": "auto_discovered",
+            "candidate_id": candidate.candidate_id,
+            "provider": candidate.provider,
+            "query": candidate.query,
+            "source_type_hint": candidate.source_type_hint,
+            "ranking_score": candidate.ranking_score,
+        }
+    return provenance
+
+
+def _annotate_discovered_sources(
+    crawl_result: CrawlResult,
+    provenance: dict[str, dict[str, Any]],
+) -> None:
+    for source in crawl_result.sources:
+        key = source.normalized_url or normalize_url(source.url)
+        meta = provenance.get(key)
+        if not meta:
+            continue
+        source.source_kind = "auto_discovered"
+        source.discovered_anchor_text = (
+            f"source_discovery candidate={meta['candidate_id']} "
+            f"provider={meta['provider']} query={meta['query']}"
+        )
+        source.priority_score = float(meta.get("ranking_score") or 0.0)
+        source.priority_reasons = (
+            *source.priority_reasons,
+            f"Automatically discovered as {meta.get('source_type_hint', 'unknown')}.",
+            "Search acquisition artifacts document selection rationale.",
+        )
+
+
 def _relative_run_artifact(thread_id: str, local_path: str | None) -> str | None:
     if not local_path:
         return None
@@ -238,9 +390,7 @@ def _memory_record_from_source(
     normalized = source.normalized_url or normalize_url(source_url)
     canonical = normalize_url(source.canonical_url) if source.canonical_url else None
     text_hash = content_hash(text)
-    memory_id = hashlib.sha1(
-        f"{thread_id}|{normalized}|{text_hash}".encode("utf-8")
-    ).hexdigest()
+    memory_id = hashlib.sha1(f"{thread_id}|{normalized}|{text_hash}".encode("utf-8")).hexdigest()
     extraction = extract_entities_and_topics(
         question=question,
         text=text,
@@ -628,7 +778,9 @@ def _write_mock_source_artifacts(
     thread_dir,
     thread_id: str,
     urls: list[str],
+    discovery_provenance: dict[str, dict[str, Any]] | None = None,
 ) -> CrawlResult:
+    discovery_provenance = discovery_provenance or {}
     result = CrawlResult(root_urls=urls)
     result.budget = CrawlBudgetStats(
         root_count=len(urls),
@@ -636,19 +788,36 @@ def _write_mock_source_artifacts(
         max_links_per_source=0,
         max_depth=0,
     )
-    result.sources = [
-        SourceRecord(
-            url=url,
-            normalized_url=url,
-            source_kind="root",
-            ok=False,
-            skipped=True,
-            skip_reason="mock_mode_not_fetched",
-            title="Mock source placeholder",
-            source_id=f"S{idx}",
+    result.sources = []
+    for idx, url in enumerate(urls, start=1):
+        normalized = normalize_url(url) if url.startswith(("http://", "https://")) else url
+        provenance = discovery_provenance.get(normalized)
+        result.sources.append(
+            SourceRecord(
+                url=url,
+                normalized_url=normalized,
+                source_kind="auto_discovered" if provenance else "root",
+                ok=False,
+                skipped=True,
+                skip_reason="mock_mode_not_fetched",
+                title="Mock discovered source placeholder"
+                if provenance
+                else "Mock source placeholder",
+                priority_score=float(provenance.get("ranking_score") or 0.0)
+                if provenance
+                else None,
+                priority_reasons=(
+                    ("Automatically discovered by source discovery.",) if provenance else ()
+                ),
+                discovered_anchor_text=(
+                    f"source_discovery candidate={provenance.get('candidate_id')} "
+                    f"provider={provenance.get('provider')} query={provenance.get('query')}"
+                    if provenance
+                    else ""
+                ),
+                source_id=f"S{idx}",
+            )
         )
-        for idx, url in enumerate(urls, start=1)
-    ]
     if not result.sources:
         result.sources = [
             SourceRecord(
@@ -692,6 +861,53 @@ def _try_rebuild_evaluation(
                 "confidence": evaluation.confidence,
             },
         )
+
+
+def _try_rebuild_verification(
+    *,
+    settings: Settings,
+    td,
+    thread_id: str,
+    warnings: list[str],
+    run_context: RunContext | None = None,
+) -> bool:
+    if not settings.verification_enabled:
+        return False
+    try:
+        batch = rebuild_verification_artifacts(
+            td,
+            thread_id=thread_id,
+            config=VerificationConfig(
+                verification_gate_enabled=settings.verification_gate_enabled,
+            ),
+        )
+    except Exception as e:
+        log.exception("verification rebuild failed")
+        warnings.append(f"Verification artifacts were not generated: {type(e).__name__}: {e}")
+        return False
+    if run_context:
+        for rel_path in VERIFICATION_ARTIFACTS:
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+        run_context.log(
+            "artifact_written",
+            message="verification",
+            metadata={
+                "total_tasks": batch.summary.total_tasks,
+                "unsupported": batch.summary.unsupported,
+                "contradicted": batch.summary.contradicted,
+                "confidence": batch.summary.confidence_after,
+            },
+        )
+    gate_required = (
+        settings.verification_gate_enabled and batch.summary.high_priority_open_issues > 0
+    )
+    if gate_required:
+        warnings.append(
+            "Verification gate requires review because high-priority unsupported, "
+            "contradicted, or unresolved claims remain."
+        )
+    return gate_required
 
 
 def _try_rebuild_intelligence_summary(
@@ -738,6 +954,56 @@ def _write_audit_for_sources(
     return batch
 
 
+def _try_rebuild_retrieval(
+    *,
+    td,
+    thread_id: str,
+    question: str,
+    warnings: list[str],
+    run_context: RunContext | None = None,
+):
+    try:
+        result = rebuild_retrieval_artifacts(td, thread_id=thread_id, question=question)
+    except Exception as e:
+        log.exception("retrieval rebuild failed")
+        warnings.append(f"Retrieval artifacts were not generated: {type(e).__name__}: {e}")
+        return None
+    if run_context:
+        for rel_path in RETRIEVAL_ARTIFACTS:
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+        run_context.log(
+            "artifact_written",
+            message="retrieval_context_packs",
+            metadata={
+                "chunks": result.index.chunk_count,
+                "queries": len(result.queries),
+                "results": len(result.results),
+            },
+        )
+    return result
+
+
+def _write_document_intelligence_for_sources(
+    *,
+    thread_dir,
+    thread_id: str,
+    sources: list[SourceRecord] | list[dict[str, Any]],
+    run_context: RunContext | None = None,
+):
+    source_dicts = [s.to_dict() if hasattr(s, "to_dict") else s for s in sources]
+    batch = build_document_intelligence_batch(
+        thread_dir=thread_dir,
+        sources=source_dicts,
+        thread_id=thread_id,
+    )
+    for rel_path in write_document_intelligence_artifacts(thread_dir, batch):
+        if run_context:
+            path = thread_dir / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+    return batch
+
+
 def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
     configure_logging()
     settings = settings or Settings.load()
@@ -750,6 +1016,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     )
     memory_retriever = MemoryRetriever(memory_repository, memory_source_cache)
     orchestration_executor = OrchestrationExecutor(settings.runs_dir)
+    protocol_registry = ProtocolRegistry()
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -760,6 +1027,37 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.get("/models")
     def models() -> list[dict[str, Any]]:
         return [m.dict() for m in build_model_registry(settings)]
+
+    @app.get("/protocols")
+    def protocols() -> list[dict[str, Any]]:
+        return [
+            protocol_model_to_plain(protocol) for protocol in protocol_registry.list_protocols()
+        ]
+
+    @app.post("/protocols/select")
+    def protocols_select(req: ProtocolSelectRequest) -> dict[str, Any]:
+        try:
+            selection = select_protocol(
+                question=req.question.strip(),
+                urls=req.urls,
+                requested_protocol_id=req.protocol_id,
+                requested_profile_id=req.intelligence_profile_id,
+                mock_mode=req.mock_mode,
+                registry=protocol_registry,
+            )
+        except ProtocolError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return protocol_model_to_plain(selection)
+
+    @app.get("/profiles")
+    def profiles() -> list[dict[str, Any]]:
+        return [
+            protocol_model_to_plain(profile)
+            for profile in sorted(
+                built_in_profiles().values(),
+                key=lambda item: item.profile_id,
+            )
+        ]
 
     @app.get("/runtime/diagnostics")
     def diagnostics() -> dict[str, Any]:
@@ -788,21 +1086,96 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             },
         )
 
-        urls = [u.strip() for u in req.urls if u and u.strip()]
-        urls = urls[: max(0, min(req.max_sources, 3))] if urls else []
+        requested_urls = [u.strip() for u in req.urls if u and u.strip()]
+        try:
+            protocol_selection = select_protocol(
+                question=req.question.strip(),
+                urls=requested_urls,
+                requested_protocol_id=req.protocol_id,
+                requested_profile_id=req.intelligence_profile_id,
+                mock_mode=effective_settings.model_provider == "mock",
+            )
+        except ProtocolError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        for rel_path in write_protocol_artifacts(td, protocol_selection):
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+        run_context.log(
+            "protocol_selected",
+            message=protocol_selection.selected_protocol.protocol_id,
+            metadata={
+                "profile_id": protocol_selection.intelligence_profile.profile_id,
+                "confidence_score": protocol_selection.confidence_score,
+                "review_recommended": protocol_selection.review_recommended,
+                "reasons": protocol_selection.reasons,
+            },
+        )
+
+        requested_max_sources = (
+            protocol_selection.intelligence_profile.max_sources
+            if req.max_sources is None
+            else int(req.max_sources)
+        )
+        effective_max_sources = max(
+            0,
+            min(
+                requested_max_sources,
+                protocol_selection.intelligence_profile.max_sources,
+                run_context.budget.budget.max_source_fetches,
+                20,
+            ),
+        )
+        urls = requested_urls[:effective_max_sources] if requested_urls else []
         follow_links = (
-            effective_settings.default_follow_links
+            protocol_selection.intelligence_profile.follow_links_default
             if req.follow_links is None
             else bool(req.follow_links)
         )
+        follow_links = bool(
+            follow_links and protocol_selection.intelligence_profile.source_discovery_enabled
+        )
         max_links_per_source = (
-            effective_settings.default_max_links_per_source
+            protocol_selection.intelligence_profile.max_links_per_source_default
             if req.max_links_per_source is None
             else int(req.max_links_per_source)
         )
         max_links_per_source = max(0, min(max_links_per_source, 10))
+        discovery_settings = _source_discovery_settings(effective_settings, req.source_discovery)
+        discovery_settings = discovery_settings.copy(
+            update={
+                "discovery_enabled": bool(
+                    discovery_settings.discovery_enabled
+                    and protocol_selection.intelligence_profile.source_discovery_enabled
+                ),
+                "max_selected_sources": min(
+                    discovery_settings.max_selected_sources,
+                    max(0, effective_max_sources - len(urls)),
+                ),
+                "require_primary_source_when_possible": any(
+                    requirement.required
+                    and requirement.source_type
+                    in {
+                        "primary_source",
+                        "official_docs",
+                        "source_code",
+                        "legal_text",
+                        "regulator_guidance",
+                        "medical_guideline",
+                        "clinical_source",
+                        "financial_filing",
+                    }
+                    for requirement in protocol_selection.effective_source_requirements
+                ),
+                "freshness_required": (
+                    True
+                    if protocol_selection.effective_freshness_policy.strictness
+                    == "current_required"
+                    else discovery_settings.freshness_required
+                ),
+            }
+        )
         require_review = (
-            effective_settings.review_gate_default
+            effective_settings.review_gate_default or protocol_selection.review_recommended
             if req.require_review is None
             else bool(req.require_review)
         )
@@ -812,12 +1185,18 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             urls=urls,
             settings_snapshot={
                 **settings_snapshot_from_object(effective_settings),
-                "max_sources": max(0, min(req.max_sources, 3)),
+                "max_sources": effective_max_sources,
                 "max_links_per_source": max_links_per_source,
                 "follow_links": follow_links,
                 "generate_strategy": bool(req.generate_strategy),
                 "require_review": require_review,
                 "mock_mode": effective_settings.model_provider == "mock",
+                "protocol_id": protocol_selection.selected_protocol.protocol_id,
+                "intelligence_profile_id": protocol_selection.intelligence_profile.profile_id,
+                "protocol_confidence_score": protocol_selection.confidence_score,
+                "source_discovery": discovery_settings.model_dump(mode="json")
+                if hasattr(discovery_settings, "model_dump")
+                else discovery_settings.dict(),
             },
             require_review=require_review,
         )
@@ -841,6 +1220,8 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         lifecycle = RunLifecycle(run_repository, thread_id)
 
         strategy: ResearchStrategy | None = None
+        pre_agent_warnings: list[str] = [warning.message for warning in protocol_selection.warnings]
+        retrieval_build_result = None
         try:
             lifecycle.transition(RunStatus.PLANNING)
             if req.generate_strategy:
@@ -857,11 +1238,51 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     run_context.artifact_written(artifact.path, artifact.size_bytes)
                 lifecycle.checkpoint()
 
+            discovery_request = SourceDiscoveryRequest(
+                question=req.question.strip(),
+                user_urls=urls,
+                thread_id=thread_id,
+                settings=discovery_settings,
+                persist=True,
+            )
+            source_discovery_batch = execute_source_discovery(discovery_request)
+            for rel_path in write_source_discovery_artifacts(td, source_discovery_batch):
+                path = td / rel_path
+                run_context.artifact_written(
+                    rel_path, path.stat().st_size if path.exists() else None
+                )
+            run_context.log(
+                "source_discovery_completed",
+                message=source_discovery_batch.summary.skipped_reason
+                or "source discovery completed",
+                metadata=discovery_model_to_plain(source_discovery_batch.summary),
+            )
+            remaining_fetch_slots = max(
+                0,
+                min(
+                    run_context.budget.budget.max_source_fetches,
+                    effective_max_sources,
+                )
+                - len(urls),
+            )
+            selected_discovered_urls = [
+                candidate.url
+                for candidate in source_discovery_batch.selected_candidates[:remaining_fetch_slots]
+            ]
+            discovery_provenance = _discovery_provenance(source_discovery_batch)
+            fetch_urls = _merge_source_urls(urls, selected_discovered_urls)
+            if selected_discovered_urls:
+                run_context.log(
+                    "source_discovery_selected",
+                    message=f"selected {len(selected_discovered_urls)} discovered sources",
+                    metadata={"selected_urls": selected_discovered_urls},
+                )
+
             lifecycle.transition(RunStatus.FETCHING_SOURCES)
             if effective_settings.model_provider == "mock":
                 sources_meta = [
                     {"ok": False, "url": u, "title": "Mock source placeholder", "mock": True}
-                    for u in urls
+                    for u in fetch_urls
                 ]
                 metadata = write_mock_research_artifacts(
                     thread_dir=td,
@@ -870,13 +1291,24 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     sources_meta=sources_meta,
                 )
                 mock_crawl_result = _write_mock_source_artifacts(
-                    thread_dir=td, thread_id=thread_id, urls=urls
+                    thread_dir=td,
+                    thread_id=thread_id,
+                    urls=fetch_urls,
+                    discovery_provenance=discovery_provenance,
                 )
+                warnings: list[str] = list(pre_agent_warnings)
                 _write_audit_for_sources(
                     thread_dir=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
                     sources=mock_crawl_result.sources,
+                    run_context=run_context,
+                )
+                _try_rebuild_retrieval(
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    warnings=warnings,
                     run_context=run_context,
                 )
                 _update_memory_store(
@@ -889,7 +1321,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 graph = orchestration_executor.build_graph(
                     thread_id=thread_id,
                     question=req.question.strip(),
-                    urls=urls,
+                    urls=fetch_urls,
                     strategy=strategy,
                     follow_links=follow_links,
                     max_links_per_source=max_links_per_source,
@@ -951,7 +1383,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     message="evidence_coverage",
                     metadata={"total_claims": ledger.coverage.total_claims},
                 )
-                warnings: list[str] = []
+                verification_gate_required = _try_rebuild_verification(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=warnings,
+                    run_context=run_context,
+                )
                 try:
                     synthesis = rebuild_synthesis_artifacts(td, thread_id=thread_id)
                     for rel_path in (*SYNTHESIS_ARTIFACTS, "report.raw.md"):
@@ -988,7 +1426,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     budget_summary=read_budget_file(td / "budget.json"),
                 )
                 lifecycle.complete(
-                    require_review=require_review,
+                    require_review=require_review or verification_gate_required,
                     summary="[MOCK OUTPUT] Deterministic offline run completed.",
                 )
                 _try_rebuild_intelligence_summary(
@@ -1010,6 +1448,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     "hint": f"Report should be at runs/{thread_id}/report.md",
                     "mock": True,
                     "budget": read_budget_file(td / "budget.json"),
+                    "protocol": protocol_model_to_plain(protocol_selection),
                     "run": run_summary(run_repository.get(thread_id)),
                 }
 
@@ -1017,13 +1456,21 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 effective_settings,
                 td,
                 thread_id,
-                urls,
+                fetch_urls,
                 question=req.question.strip(),
                 follow_links=follow_links,
                 max_links_per_source=max_links_per_source,
                 run_context=run_context,
             )
+            _annotate_discovered_sources(crawl_result, discovery_provenance)
+            write_sources_manifest(td / "sources.json", crawl_result.sources)
             sources_meta = crawl_result.to_sources_json()
+            document_batch = _write_document_intelligence_for_sources(
+                thread_dir=td,
+                thread_id=thread_id,
+                sources=crawl_result.sources,
+                run_context=run_context,
+            )
             source_audit_batch = _write_audit_for_sources(
                 thread_dir=td,
                 thread_id=thread_id,
@@ -1031,12 +1478,19 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 sources=crawl_result.sources,
                 run_context=run_context,
             )
+            retrieval_build_result = _try_rebuild_retrieval(
+                td=td,
+                thread_id=thread_id,
+                question=req.question.strip(),
+                warnings=pre_agent_warnings,
+                run_context=run_context,
+            )
             agent_source_urls = [source.url for source in crawl_result.usable_sources()]
             usable_source_count = len(crawl_result.usable_sources())
             graph = orchestration_executor.build_graph(
                 thread_id=thread_id,
                 question=req.question.strip(),
-                urls=urls,
+                urls=fetch_urls,
                 strategy=strategy,
                 follow_links=follow_links,
                 max_links_per_source=max_links_per_source,
@@ -1056,6 +1510,9 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             lifecycle.checkpoint()
 
             user_msg = req.question.strip()
+            user_msg += (
+                "\n\nProtocol requirements:\n" + protocol_selection.instruction_block.strip()
+            )
             if agent_source_urls:
                 user_msg += "\n\nSources (call fetch_and_store on these):\n" + "\n".join(
                     f"- {u}" for u in agent_source_urls
@@ -1071,9 +1528,20 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 )
             if source_audit_batch.summary.instruction_block:
                 user_msg += (
-                    "\n\nSource audit context:\n"
-                    + source_audit_batch.summary.instruction_block
+                    "\n\nSource audit context:\n" + source_audit_batch.summary.instruction_block
                 )
+            document_context = build_document_context_block(document_batch)
+            if document_context:
+                user_msg += "\n\n" + document_context
+            if retrieval_build_result is not None:
+                agent_pack = retrieval_build_result.packs.get("agent_context_pack")
+                if agent_pack is not None and agent_pack.items:
+                    user_msg += (
+                        "\n\n"
+                        + render_agent_context_block(agent_pack)
+                        + "\n\nUse retrieval excerpts as already-fetched local evidence. "
+                        "When citing, preserve source IDs and URLs from citation hints."
+                    )
             prior_context = _prior_context_prompt(memory_context)
             if prior_context:
                 user_msg += "\n\n" + prior_context
@@ -1091,7 +1559,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             )
             agent = active_service.build_agent(
                 thread_id,
-                max_sources=max(0, min(req.max_sources, 3)),
+                max_sources=effective_max_sources,
                 max_links_per_source=max_links_per_source,
                 follow_links=follow_links,
                 run_context=run_context,
@@ -1189,6 +1657,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                         "Evidence artifacts were not generated: "
                         f"{type(evidence_error).__name__}: {evidence_error}"
                     )
+                fallback_verification_gate_required = _try_rebuild_verification(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    warnings=fallback_warnings,
+                    run_context=run_context,
+                )
                 try:
                     rebuild_synthesis_artifacts(td, thread_id=thread_id)
                 except Exception as synthesis_error:
@@ -1212,7 +1687,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     budget_summary=read_budget_file(td / "budget.json"),
                 )
                 lifecycle.complete(
-                    require_review=require_review,
+                    require_review=require_review or fallback_verification_gate_required,
                     summary=("[MOCK OUTPUT] Explicit mock fallback completed after model failure."),
                 )
                 _try_rebuild_intelligence_summary(
@@ -1235,10 +1710,12 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     "hint": f"Report should be at runs/{thread_id}/report.md",
                     "mock": True,
                     "budget": read_budget_file(td / "budget.json"),
+                    "protocol": protocol_model_to_plain(protocol_selection),
                     "run": run_summary(run_repository.get(thread_id)),
                 }
             run_repository.record_error(thread_id, e, fail_run=True)
             warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+            warnings.extend(pre_agent_warnings)
             for artifact in list_artifacts(settings.runs_dir, thread_id):
                 run_context.artifact_written(artifact.path, artifact.size_bytes)
             run_context.log("run_failed", message=f"{type(e).__name__}: {e}")
@@ -1262,11 +1739,19 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 summary_text = getattr(last, "content", "") or ""
 
         warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+        warnings.extend(pre_agent_warnings)
         try:
             rebuild_evidence_artifacts(td, thread_id=thread_id)
         except Exception as e:
             log.exception("evidence rebuild failed")
             warnings.append(f"Evidence artifacts were not generated: {type(e).__name__}: {e}")
+        verification_gate_required = _try_rebuild_verification(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            warnings=warnings,
+            run_context=run_context,
+        )
         try:
             synthesis = rebuild_synthesis_artifacts(td, thread_id=thread_id)
             run_context.log(
@@ -1297,7 +1782,10 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         run_repository.set_output_summary(
             thread_id, budget_summary=read_budget_file(td / "budget.json")
         )
-        lifecycle.complete(require_review=require_review, summary=summary_text)
+        lifecycle.complete(
+            require_review=require_review or verification_gate_required,
+            summary=summary_text,
+        )
         _try_rebuild_intelligence_summary(
             settings=settings,
             td=td,
@@ -1316,6 +1804,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "hint": f"Report should be at runs/{thread_id}/report.md",
             "mock": False,
             "budget": read_budget_file(td / "budget.json"),
+            "protocol": protocol_model_to_plain(protocol_selection),
             "run": run_summary(run_repository.get(thread_id)),
         }
 
@@ -1341,6 +1830,143 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             else ledger.coverage.dict(),
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
         }
+
+    @app.post("/runs/{thread_id}/verification/rebuild")
+    def verification_rebuild(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+        try:
+            batch = rebuild_verification_artifacts(
+                td,
+                thread_id=thread_id,
+                config=VerificationConfig(
+                    verification_gate_enabled=settings.verification_gate_enabled,
+                ),
+            )
+        except Exception as e:
+            log.exception("verification rebuild failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+        if run_repository.get_or_none(thread_id) is not None:
+            run_repository.set_warnings(thread_id, warnings + batch.summary.warnings)
+            run_repository.refresh_artifacts(thread_id)
+
+        return {
+            "thread_id": thread_id,
+            "warnings": warnings + batch.summary.warnings,
+            "summary": verification_model_to_plain(batch.summary),
+            "confidence_calibration": verification_model_to_plain(
+                batch.confidence_calibration
+            ),
+            "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
+
+    @app.get("/runs/{thread_id}/verification")
+    def verification_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _read_json_artifact(td, "verification_results.json")
+
+    @app.get("/runs/{thread_id}/confidence-calibration")
+    def confidence_calibration_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _read_json_artifact(td, "confidence_calibration.json")
+
+    @app.get("/runs/{thread_id}/claim-rewrite-suggestions")
+    def claim_rewrite_suggestions_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        data = _read_json_artifact(td, "verification_results.json")
+        return {
+            "thread_id": thread_id,
+            "suggestions": data.get("claim_rewrite_suggestions", []),
+        }
+
+    @app.post("/retrieval/search")
+    def retrieval_search(req: RetrievalSearchRequest) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, req.thread_id)
+            index_path = td / "retrieval_index.json"
+            if not index_path.exists() and not req.rebuild_if_missing:
+                raise HTTPException(status_code=404, detail="Retrieval index not found")
+            index = build_retrieval_index(td, thread_id=req.thread_id)
+            query = plan_retrieval_queries(req.query, max_queries=1)[0]
+            results = rank_retrieval_results(
+                index,
+                query,
+                config=HybridRankingConfig(top_k=req.top_k, candidate_k=max(req.top_k, 30)),
+            )
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("retrieval search failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        return {
+            "thread_id": req.thread_id,
+            "query": retrieval_model_to_plain(query),
+            "results": retrieval_model_to_plain(results),
+        }
+
+    @app.post("/runs/{thread_id}/retrieval/rebuild")
+    def retrieval_rebuild(thread_id: str) -> dict[str, Any]:
+        try:
+            run = run_repository.get(thread_id)
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+            result = rebuild_retrieval_artifacts(td, thread_id=thread_id, question=run.question)
+            run_repository.refresh_artifacts(thread_id)
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("retrieval rebuild failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        return {
+            "thread_id": thread_id,
+            "index": {
+                "documents": len(result.index.documents),
+                "chunks": result.index.chunk_count,
+                "warnings": result.index.warnings,
+            },
+            "queries": len(result.queries),
+            "results": len(result.results),
+            "packs": {name: len(pack.items) for name, pack in result.packs.items()},
+            "coverage": retrieval_model_to_plain(result.coverage_summary),
+            "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
+
+    @app.get("/runs/{thread_id}/context-packs")
+    def context_packs_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "context_packs.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Context packs not found")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @app.get("/runs/{thread_id}/retrieval-results")
+    def retrieval_results_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "retrieval_results.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Retrieval results not found")
+        return json.loads(path.read_text(encoding="utf-8"))
 
     @app.post("/runs/{thread_id}/synthesis/rebuild")
     def synthesis_rebuild(thread_id: str) -> dict[str, Any]:
@@ -1394,6 +2020,28 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return _read_json_artifact(td, "decision_memo.json")
+
+    @app.get("/runs/{thread_id}/protocol")
+    def protocol_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        selection = _load_json_file(td / "protocol_selection.json")
+        profile = _load_json_file(td / "intelligence_profile.json")
+        requirements = _load_json_file(td / "policy_requirements.json")
+        warnings_md = _read_text(td / "policy_warnings.md", max_chars=20_000)
+        instructions_md = _read_text(td / "protocol_instructions.md", max_chars=50_000)
+        if selection is None and profile is None and requirements is None:
+            raise HTTPException(status_code=404, detail="Protocol artifacts not found")
+        return {
+            "thread_id": thread_id,
+            "selection": selection,
+            "profile": profile,
+            "requirements": requirements,
+            "policy_warnings_markdown": warnings_md,
+            "instructions_markdown": instructions_md,
+        }
 
     @app.get("/runs/{thread_id}/uncertainty")
     def uncertainty_get(thread_id: str) -> dict[str, Any]:
@@ -1565,7 +2213,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         )
         write_source_audit_artifacts(td, batch)
         run_repository.refresh_artifacts(thread_id)
-        return model_to_plain(batch)
+        return source_audit_model_to_plain(batch)
 
     @app.post("/source-audit")
     def source_audit_create(req: SourceAuditRequest) -> dict[str, Any]:
@@ -1600,7 +2248,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             write_source_audit_artifacts(td, batch)
             if req.thread_id and run_repository.get_or_none(req.thread_id):
                 run_repository.refresh_artifacts(req.thread_id)
-        return model_to_plain(batch)
+        return source_audit_model_to_plain(batch)
 
     @app.get("/runs/{thread_id}/source-audit")
     def source_audit_get(thread_id: str) -> dict[str, Any]:
@@ -1642,6 +2290,75 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             ],
             "citation_risks": data.get("summary", {}).get("citation_risks", []),
         }
+
+    @app.post("/document-intelligence/profile")
+    def document_intelligence_profile(req: DocumentProfileRequest) -> dict[str, Any]:
+        try:
+            profile = profile_document(
+                raw_text=req.raw_text,
+                source=req.source,
+                source_id=req.source_id,
+                url=req.url,
+                title=req.title,
+                source_type=req.source_type,
+            )
+        except Exception as e:
+            log.exception("document profile failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+        if req.persist:
+            if not req.thread_id:
+                raise HTTPException(
+                    status_code=400, detail="thread_id is required when persist=true"
+                )
+            try:
+                td = ensure_thread_dir(settings.runs_dir, req.thread_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            batch = build_document_intelligence_batch(
+                thread_dir=td,
+                sources=[],
+                thread_id=req.thread_id,
+            )
+            batch.profiles = [profile]
+            write_document_intelligence_artifacts(td, batch)
+            if run_repository.get_or_none(req.thread_id):
+                run_repository.refresh_artifacts(req.thread_id)
+        return document_model_to_plain(profile)
+
+    @app.get("/runs/{thread_id}/documents")
+    def documents_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "document_profiles.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Document profiles not found")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @app.get("/runs/{thread_id}/chunks")
+    def chunks_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "document_chunks.jsonl")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Document chunks not found")
+        chunks = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                chunks.append(json.loads(line))
+        return {"thread_id": thread_id, "chunks": chunks}
+
+    @app.get("/runs/{thread_id}/tables")
+    def tables_get(thread_id: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "document_tables.json")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Document tables not found")
+        return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/runs")
     def runs(
@@ -1851,12 +2568,90 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "strategy": strategy.to_json_dict() if strategy else None,
             "task_graph": graph.to_json_dict(),
             "stage_outputs": [
-                output.model_dump(mode="json")
-                if hasattr(output, "model_dump")
-                else output.dict()
+                output.model_dump(mode="json") if hasattr(output, "model_dump") else output.dict()
                 for output in outputs
             ],
             "summary": summary.to_json_dict(),
+        }
+
+    @app.post("/source-discovery/plan")
+    def source_discovery_plan(req: SourceDiscoveryRequest) -> dict[str, Any]:
+        request = SourceDiscoveryRequest(
+            question=req.question.strip(),
+            user_urls=[u.strip() for u in req.user_urls if u and u.strip()],
+            thread_id=req.thread_id,
+            settings=req.settings,
+            persist=req.persist,
+        )
+        plan = build_acquisition_plan(request)
+        artifacts: list[dict[str, Any]] = []
+        if request.persist and request.thread_id:
+            try:
+                td = ensure_thread_dir(settings.runs_dir, request.thread_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            batch = execute_source_discovery(request)
+            write_source_discovery_artifacts(td, batch)
+            artifacts = [a.__dict__ for a in list_artifacts(settings.runs_dir, request.thread_id)]
+        return {
+            "thread_id": request.thread_id,
+            "plan": discovery_model_to_plain(plan),
+            "artifacts": artifacts,
+        }
+
+    @app.post("/source-discovery/preview")
+    def source_discovery_preview(req: SourceDiscoveryPreviewRequest) -> dict[str, Any]:
+        request = SourceDiscoveryRequest(
+            question=req.question.strip(),
+            user_urls=[u.strip() for u in req.user_urls if u and u.strip()],
+            thread_id=req.thread_id,
+            settings=req.settings,
+            persist=req.persist,
+        )
+        batch = execute_source_discovery(request)
+        artifacts: list[dict[str, Any]] = []
+        if request.persist and request.thread_id:
+            try:
+                td = ensure_thread_dir(settings.runs_dir, request.thread_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            write_source_discovery_artifacts(td, batch)
+            artifacts = [a.__dict__ for a in list_artifacts(settings.runs_dir, request.thread_id)]
+        return {
+            "thread_id": request.thread_id,
+            "summary": discovery_model_to_plain(batch.summary),
+            "plan": discovery_model_to_plain(batch.plan),
+            "provider_results": [
+                discovery_model_to_plain(result) for result in batch.provider_results
+            ],
+            "candidates": [discovery_model_to_plain(candidate) for candidate in batch.candidates],
+            "decisions": [discovery_model_to_plain(decision) for decision in batch.decisions],
+            "selected_candidates": [
+                discovery_model_to_plain(candidate) for candidate in batch.selected_candidates
+            ],
+            "artifacts": artifacts,
+        }
+
+    @app.get("/runs/{thread_id}/source-discovery")
+    def source_discovery_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        plan = _load_json_file(td / "source_acquisition_plan.json")
+        candidates = _load_json_file(td / "source_candidates.json")
+        selection = _load_json_file(td / "source_selection.json")
+        queries = _load_json_file(td / "search_queries.json")
+        summary_md = _read_text(td / "source_discovery_summary.md", max_chars=20_000)
+        if plan is None and candidates is None and selection is None and not summary_md:
+            raise HTTPException(status_code=404, detail="Source discovery artifacts not found")
+        return {
+            "thread_id": thread_id,
+            "plan": plan,
+            "queries": queries,
+            "candidates": candidates,
+            "selection": selection,
+            "summary_markdown": summary_md,
         }
 
     @app.post("/plan")
