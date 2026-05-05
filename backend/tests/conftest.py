@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from deep_research_agent.api import create_app
-from deep_research_agent.settings import Settings
 from deep_research_agent.artifacts import ensure_thread_dir
+from deep_research_agent.settings import Settings
 
 
 class FakeAgent:
@@ -62,8 +63,15 @@ def test_runs_dir(tmp_path: Path) -> Path:
 def test_settings(test_runs_dir: Path) -> Settings:
     return Settings(
         model_provider="ollama",
-        ollama_model="llama3.1",
         temperature=0.2,
+        ollama_model="llama3.1",
+        ollama_num_predict=220,
+        openai_base_url="https://api.openai.com/v1",
+        openai_api_key="",
+        openai_model="gpt-5-mini",
+        openai_max_tokens=350,
+        openai_timeout_s=60.0,
+        openai_max_retries=1,
         runs_dir=test_runs_dir,
         max_page_chars=50_000,
         http_timeout_s=5.0,

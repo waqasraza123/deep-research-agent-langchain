@@ -1,22 +1,52 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import uuid
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .agent_factory import AgentService
-from .artifacts import artifact_abs_path, ensure_required_artifacts, ensure_thread_dir, list_artifacts
+from .artifacts import (
+    INTERNAL_FILES,
+    artifact_abs_path,
+    ensure_required_artifacts,
+    ensure_thread_dir,
+    list_artifacts,
+    write_strategy_artifacts,
+)
+from .evidence import rebuild_evidence_artifacts
+from .intelligence import ResearchStrategy, create_research_strategy
 from .logging_config import configure_logging
 from .model import create_chat_model
+from .runs.cleanup import apply_cleanup_plan, build_cleanup_plan
+from .runs.contracts import ReviewState, RunCancellationRequest, RunStatus, model_to_dict
+from .runs.lifecycle import RunLifecycle
+from .runs.repository import (
+    RunCancelledError,
+    RunListFilters,
+    RunNotFoundError,
+    RunRepository,
+    settings_snapshot_from_object,
+)
+from .runs.review import approve_review, get_review, reject_review, request_changes
+from .runs.serializers import run_detail, run_summary
+from .runs.state_machine import InvalidRunTransitionError
+from .runtime.budgets import BudgetExceeded, read_budget_file
+from .runtime.contracts import RetryPolicy, RunBudget
+from .runtime.diagnostics import build_runtime_diagnostics
+from .runtime.events import read_event_file
+from .runtime.mock_model import write_mock_research_artifacts
+from .runtime.model_registry import build_model_registry
+from .runtime.retries import retry_sync
+from .runtime.run_context import RunContext
 from .settings import Settings
-from .tools import fetch_document
-
+from .source_intelligence import CrawlResult, SourceRecord, crawl_sources
+from .source_intelligence.source_graph import write_sources_manifest
 
 log = logging.getLogger("deep_research_agent.api")
 
@@ -25,14 +55,33 @@ class RunRequest(BaseModel):
     question: str = Field(..., min_length=5)
     urls: list[str] = []
     thread_id: str | None = None
+    generate_strategy: bool = True
+    require_review: bool = False
 
     max_sources: int = Field(default=1, ge=0, le=3)
     max_links_per_source: int = Field(default=0, ge=0, le=10)
     follow_links: bool = False
+    mock_mode: bool = False
+    allow_mock_fallback: bool = False
+    budget: RunBudget | None = None
 
 
-def _sha1(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+class PlanRequest(BaseModel):
+    question: str = Field(..., min_length=5)
+    urls: list[str] = []
+    thread_id: str | None = None
+    persist: bool = True
+
+
+class ReviewActionRequest(BaseModel):
+    reviewer: str = Field(..., min_length=1)
+    notes: str = ""
+    requested_changes: list[str] = Field(default_factory=list)
+
+
+class CleanupApplyRequest(BaseModel):
+    thread_ids: list[str]
+    confirm_delete: bool = False
 
 
 def _safe_local_rel(local_path: str) -> str | None:
@@ -62,74 +111,57 @@ def _read_text(path, *, max_chars: int) -> str:
         return ""
 
 
-def _prefetch_sources(settings: Settings, td, thread_id: str, urls: list[str]) -> list[dict[str, Any]]:
-    sources_dir = (td / "sources").resolve()
-    sources_dir.mkdir(parents=True, exist_ok=True)
+def _prefetch_sources(
+    settings: Settings,
+    td,
+    thread_id: str,
+    urls: list[str],
+    *,
+    question: str,
+    follow_links: bool,
+    max_links_per_source: int,
+    run_context: RunContext | None = None,
+) -> CrawlResult:
+    def on_fetch_start(url: str, source_kind: str) -> None:
+        if not run_context:
+            return
+        if source_kind == "discovered":
+            run_context.budget.increment_crawl_expansion()
+            run_context.persist_budget()
+        run_context.source_fetch_started(url)
 
-    out: list[dict[str, Any]] = []
-    for u in urls:
-        h = _sha1(u)
-        txt_path = sources_dir / f"{h}.txt"
-        meta_path = sources_dir / f"{h}.json"
+    def on_fetch_complete(source: SourceRecord) -> None:
+        if not run_context:
+            return
+        meta = source.to_dict()
+        if source.ok and not source.skipped:
+            run_context.source_fetch_completed(source.url, meta)
+        elif source.skipped:
+            run_context.log("source_fetch_failed", message=source.url, metadata=meta)
+        else:
+            run_context.source_fetch_failed(source.url, source.skip_reason or "fetch failed")
+        if source.local_path:
+            rel_path = source.local_path.split(f"runs/{thread_id}/", 1)[-1]
+            run_context.artifact_written(rel_path, None)
 
-        need = True
-        if txt_path.exists() and meta_path.exists():
-            try:
-                size_ok = int(txt_path.stat().st_size) >= 1200
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                if size_ok and meta.get("ok") is True and meta.get("url") == u:
-                    need = False
-            except Exception:
-                need = True
-
-        if need:
-            try:
-                fr = fetch_document(
-                    u,
-                    timeout_s=settings.http_timeout_s,
-                    max_chars=settings.max_page_chars,
-                    min_words=160,
-                    min_chars=1200,
-                )
-                txt_path.write_text(fr.extracted_text, encoding="utf-8")
-                meta = {
-                    "ok": True,
-                    "url": fr.url,
-                    "final_url": fr.final_url,
-                    "title": fr.title,
-                    "content_type": fr.content_type,
-                    "status_code": fr.status_code,
-                    "truncated": fr.truncated,
-                    "local_path": f"runs/{thread_id}/sources/{h}.txt",
-                    "strategy": fr.strategy,
-                    "word_count": fr.word_count,
-                    "char_count": fr.char_count,
-                }
-                meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-            except Exception as e:
-                try:
-                    txt_path.write_text(f"Fetch failed: {type(e).__name__}: {e}\nURL: {u}\n", encoding="utf-8")
-                except Exception:
-                    pass
-                meta = {
-                    "ok": False,
-                    "url": u,
-                    "error": f"{type(e).__name__}: {e}",
-                    "local_path": f"runs/{thread_id}/sources/{h}.txt",
-                    "strategy": "error",
-                    "word_count": 0,
-                    "char_count": 0,
-                }
-                try:
-                    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-                except Exception:
-                    pass
-
-        try:
-            out.append(json.loads(meta_path.read_text(encoding="utf-8")))
-        except Exception:
-            out.append({"ok": False, "url": u, "local_path": f"runs/{thread_id}/sources/{h}.txt", "strategy": "error"})
-    return out
+    budget_max = run_context.budget.budget.max_crawl_expansion if run_context else 20
+    result = crawl_sources(
+        question=question,
+        root_urls=urls,
+        thread_id=thread_id,
+        thread_dir=td,
+        timeout_s=settings.http_timeout_s,
+        max_chars=settings.max_page_chars,
+        follow_links=follow_links,
+        max_links_per_source=max_links_per_source,
+        global_link_budget=min(max(0, budget_max), max(0, len(urls) * max_links_per_source), 20),
+        on_fetch_start=on_fetch_start,
+        on_fetch_complete=on_fetch_complete,
+    )
+    if run_context:
+        run_context.artifact_written("source_graph.json", (td / "source_graph.json").stat().st_size)
+        run_context.artifact_written("source_graph.md", (td / "source_graph.md").stat().st_size)
+    return result
 
 
 def _build_deterministic_report(td) -> str:
@@ -148,26 +180,63 @@ def _build_deterministic_report(td) -> str:
     return body
 
 
-def _ensure_report_with_model(settings: Settings, td, question: str, sources_meta: list[dict[str, Any]]) -> None:
+def _strategy_response(
+    settings: Settings,
+    *,
+    question: str,
+    urls: list[str],
+    thread_id: str | None,
+    persist: bool,
+) -> dict[str, Any]:
+    tid = thread_id or str(uuid.uuid4())
+    strategy = create_research_strategy(question, urls)
+    artifacts: list[dict[str, Any]] = []
+    if persist:
+        ensure_thread_dir(settings.runs_dir, tid)
+        artifacts = [a.__dict__ for a in write_strategy_artifacts(settings.runs_dir, tid, strategy)]
+    return {
+        "thread_id": tid,
+        "strategy": strategy.to_json_dict(),
+        "artifacts": artifacts,
+    }
+
+
+def _ensure_report_with_model(
+    settings: Settings,
+    td,
+    question: str,
+    sources_meta: list[dict[str, Any]],
+    run_context: RunContext | None = None,
+) -> None:
     report_path = td / "report.md"
     if report_path.exists():
         return
 
-    usable = [m for m in sources_meta if isinstance(m, dict) and m.get("ok") is True and isinstance(m.get("local_path"), str)]
+    usable = [
+        m
+        for m in sources_meta
+        if isinstance(m, dict) and m.get("ok") is True and isinstance(m.get("local_path"), str)
+    ]
     if not usable:
         report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
+        if run_context:
+            run_context.artifact_written("report.md", report_path.stat().st_size)
         return
 
     m = usable[0]
     rel = _safe_local_rel(m["local_path"])
     if not rel:
         report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
+        if run_context:
+            run_context.artifact_written("report.md", report_path.stat().st_size)
         return
 
     src_fs = (settings.runs_dir / rel).resolve()
     src_text = _read_text(src_fs, max_chars=8000)
     if not src_text:
         report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
+        if run_context:
+            run_context.artifact_written("report.md", report_path.stat().st_size)
         return
 
     notes = _read_text(td / "notes.md", max_chars=2500)
@@ -189,22 +258,84 @@ def _ensure_report_with_model(settings: Settings, td, question: str, sources_met
     )
 
     try:
+        if run_context:
+            model_name = (
+                settings.ollama_model
+                if settings.model_provider == "ollama"
+                else settings.openai_model
+            )
+            run_context.model_call_started(
+                provider=settings.model_provider,
+                model_name=model_name,
+                purpose="ensure report artifact",
+            )
         model = create_chat_model(settings)
-        msg = model.invoke([{"role": "user", "content": prompt}])
+        policy = RetryPolicy(max_attempts=max(1, settings.openai_max_retries + 1))
+        msg, retry_meta = retry_sync(
+            lambda: model.invoke([{"role": "user", "content": prompt}]), policy
+        )
         content = (getattr(msg, "content", "") or "").strip()
+        if run_context:
+            run_context.model_call_completed(
+                generated_chars=len(content),
+                metadata={"purpose": "ensure report artifact", "retry": retry_meta},
+            )
         if len(content) >= 200:
             report_path.write_text(content + "\n", encoding="utf-8")
+            if run_context:
+                run_context.artifact_written("report.md", report_path.stat().st_size)
             return
-    except Exception:
+    except BudgetExceeded:
+        raise
+    except Exception as e:
+        if run_context:
+            run_context.log(
+                "model_call_failed",
+                message="ensure report artifact",
+                metadata={"error": f"{type(e).__name__}: {e}"},
+            )
         log.exception("ensure_report_with_model failed")
 
     report_path.write_text(_build_deterministic_report(td), encoding="utf-8")
+    if run_context:
+        run_context.artifact_written("report.md", report_path.stat().st_size)
+
+
+def _normalize_dt(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _advance_to_building_evidence(
+    repository: RunRepository,
+    lifecycle: RunLifecycle,
+    thread_id: str,
+) -> None:
+    order = [
+        RunStatus.CREATED,
+        RunStatus.PLANNING,
+        RunStatus.FETCHING_SOURCES,
+        RunStatus.ANALYZING,
+        RunStatus.WRITING_REPORT,
+        RunStatus.BUILDING_EVIDENCE,
+    ]
+    current = repository.get(thread_id).status
+    if current == RunStatus.BUILDING_EVIDENCE:
+        return
+    if current not in order:
+        raise InvalidRunTransitionError(current, RunStatus.BUILDING_EVIDENCE)
+    for status in order[order.index(current) + 1 :]:
+        lifecycle.transition(status)
 
 
 def create_app(*, settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
     configure_logging()
     settings = settings or Settings.load()
     service = service or AgentService(settings)
+    run_repository = RunRepository(settings.runs_dir)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -212,36 +343,264 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     def health() -> dict[str, Any]:
         return {"ok": True}
 
+    @app.get("/models")
+    def models() -> list[dict[str, Any]]:
+        return [m.dict() for m in build_model_registry(settings)]
+
+    @app.get("/runtime/diagnostics")
+    def diagnostics() -> dict[str, Any]:
+        return build_runtime_diagnostics(settings).dict()
+
     @app.post("/run")
     def run(req: RunRequest) -> dict[str, Any]:
         thread_id = req.thread_id or str(uuid.uuid4())
         td = ensure_thread_dir(settings.runs_dir, thread_id)
+        effective_settings = settings
+        if req.mock_mode:
+            effective_settings = replace(settings, model_provider="mock")
+        if req.allow_mock_fallback and not effective_settings.allow_mock_fallback:
+            effective_settings = replace(effective_settings, allow_mock_fallback=True)
+        run_context = RunContext(
+            thread_id=thread_id,
+            thread_dir=td,
+            budget=req.budget or effective_settings.default_budget(),
+        )
+        run_context.log(
+            "run_started",
+            message=req.question.strip(),
+            metadata={
+                "provider": effective_settings.model_provider,
+                "mock_mode": effective_settings.model_provider == "mock",
+            },
+        )
 
         urls = [u.strip() for u in req.urls if u and u.strip()]
         urls = urls[: max(0, min(req.max_sources, 3))] if urls else []
-
-        sources_meta = _prefetch_sources(settings, td, thread_id, urls)
-
-        user_msg = req.question.strip()
-        if urls:
-            user_msg += "\n\nSources (call fetch_and_store on these):\n" + "\n".join(f"- {u}" for u in urls)
-        user_msg += "\n\nRules:\n- Use only fetched sources.\n- Do not use outside knowledge.\n- Write all required files."
-
-        agent = service.build_agent(
-            thread_id,
-            max_sources=max(0, min(req.max_sources, 3)),
-            max_links_per_source=max(0, min(req.max_links_per_source, 10)),
-            follow_links=bool(req.follow_links),
+        run_repository.create(
+            thread_id=thread_id,
+            question=req.question.strip(),
+            urls=urls,
+            settings_snapshot={
+                **settings_snapshot_from_object(effective_settings),
+                "max_sources": max(0, min(req.max_sources, 3)),
+                "max_links_per_source": max(0, min(req.max_links_per_source, 10)),
+                "follow_links": bool(req.follow_links),
+                "generate_strategy": bool(req.generate_strategy),
+                "require_review": bool(req.require_review),
+                "mock_mode": effective_settings.model_provider == "mock",
+            },
+            require_review=bool(req.require_review),
         )
+        lifecycle = RunLifecycle(run_repository, thread_id)
 
+        strategy: ResearchStrategy | None = None
         try:
+            lifecycle.transition(RunStatus.PLANNING)
+            if req.generate_strategy:
+                strategy = create_research_strategy(req.question.strip(), urls)
+                strategy_artifacts = write_strategy_artifacts(
+                    effective_settings.runs_dir, thread_id, strategy
+                )
+                run_context.log(
+                    "strategy_created",
+                    message=strategy.research_id,
+                    metadata={"research_id": strategy.research_id},
+                )
+                for artifact in strategy_artifacts:
+                    run_context.artifact_written(artifact.path, artifact.size_bytes)
+                lifecycle.checkpoint()
+
+            lifecycle.transition(RunStatus.FETCHING_SOURCES)
+            if effective_settings.model_provider == "mock":
+                sources_meta = [
+                    {"ok": False, "url": u, "title": "Mock source placeholder", "mock": True}
+                    for u in urls
+                ]
+                metadata = write_mock_research_artifacts(
+                    thread_dir=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    sources_meta=sources_meta,
+                )
+                for rel_path in (
+                    "plan.md",
+                    "notes.md",
+                    "sources.json",
+                    "report.md",
+                    "metadata.json",
+                ):
+                    path = td / rel_path
+                    run_context.artifact_written(
+                        rel_path,
+                        path.stat().st_size if path.exists() else None,
+                    )
+                lifecycle.transition(RunStatus.ANALYZING)
+                lifecycle.transition(RunStatus.WRITING_REPORT)
+                lifecycle.transition(RunStatus.BUILDING_EVIDENCE)
+                run_context.budget_warning()
+                run_context.log("run_completed", message="mock run completed", metadata=metadata)
+                run_repository.refresh_artifacts(thread_id)
+                run_repository.set_output_summary(
+                    thread_id,
+                    budget_summary=read_budget_file(td / "budget.json"),
+                )
+                lifecycle.complete(
+                    require_review=bool(req.require_review),
+                    summary="[MOCK OUTPUT] Deterministic offline run completed.",
+                )
+                return {
+                    "thread_id": thread_id,
+                    "summary": "[MOCK OUTPUT] Deterministic offline run completed.",
+                    "strategy": strategy.to_json_dict() if strategy else None,
+                    "warnings": [],
+                    "artifacts": [
+                        a.__dict__ for a in list_artifacts(effective_settings.runs_dir, thread_id)
+                    ],
+                    "hint": f"Report should be at runs/{thread_id}/report.md",
+                    "mock": True,
+                    "budget": read_budget_file(td / "budget.json"),
+                    "run": run_summary(run_repository.get(thread_id)),
+                }
+
+            crawl_result = _prefetch_sources(
+                effective_settings,
+                td,
+                thread_id,
+                urls,
+                question=req.question.strip(),
+                follow_links=bool(req.follow_links),
+                max_links_per_source=max(0, min(req.max_links_per_source, 10)),
+                run_context=run_context,
+            )
+            sources_meta = crawl_result.to_sources_json()
+            agent_source_urls = [source.url for source in crawl_result.usable_sources()]
+            lifecycle.checkpoint()
+
+            user_msg = req.question.strip()
+            if agent_source_urls:
+                user_msg += "\n\nSources (call fetch_and_store on these):\n" + "\n".join(
+                    f"- {u}" for u in agent_source_urls
+                )
+            if strategy is not None:
+                user_msg += (
+                    "\n\nResearch strategy to follow:\n" + strategy.agent_instructions.strip()
+                )
+            user_msg += (
+                "\n\nRules:\n"
+                "- Use only fetched sources.\n"
+                "- Do not use outside knowledge.\n"
+                "- Write all required files."
+            )
+
+            lifecycle.transition(RunStatus.ANALYZING)
+            active_service = (
+                service if effective_settings is settings else AgentService(effective_settings)
+            )
+            agent = active_service.build_agent(
+                thread_id,
+                max_sources=max(0, min(req.max_sources, 3)),
+                max_links_per_source=max(0, min(req.max_links_per_source, 10)),
+                follow_links=bool(req.follow_links),
+                run_context=run_context,
+            )
+            model_name = (
+                effective_settings.ollama_model
+                if effective_settings.model_provider == "ollama"
+                else effective_settings.openai_model
+            )
+            run_context.model_call_started(
+                provider=effective_settings.model_provider,
+                model_name=model_name,
+                purpose="agent orchestration",
+            )
             result = agent.invoke(
                 {"messages": [{"role": "user", "content": user_msg}]},
                 config={"configurable": {"thread_id": thread_id}},
             )
+            run_context.model_call_completed(
+                generated_chars=len(str(result)) if result is not None else 0,
+                metadata={"purpose": "agent orchestration"},
+            )
+            lifecycle.transition(RunStatus.WRITING_REPORT)
+            write_sources_manifest(td / "sources.json", crawl_result.sources)
+            _ensure_report_with_model(
+                effective_settings, td, req.question.strip(), sources_meta, run_context
+            )
+            lifecycle.transition(RunStatus.BUILDING_EVIDENCE)
+        except BudgetExceeded as e:
+            run_context.budget_exceeded(e)
+            run_context.log("run_failed", message=str(e), metadata={"reasons": e.reasons})
+            run_repository.record_error(thread_id, e, fail_run=True)
+            raise HTTPException(
+                status_code=429,
+                detail={"error": str(e), "thread_id": thread_id, "reasons": e.reasons},
+            ) from e
         except Exception as e:
             log.exception("agent.invoke failed")
+            if isinstance(e, RunCancelledError):
+                run_context.log("run_failed", message=str(e), metadata={"cancelled": True})
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": str(e),
+                        "thread_id": thread_id,
+                        "limitation": (
+                            "Cancellation is cooperative and checked between major stages; "
+                            "it cannot interrupt an in-flight synchronous agent.invoke call."
+                        ),
+                    },
+                ) from e
+            run_context.log(
+                "model_call_failed",
+                message="agent orchestration",
+                metadata={"error": f"{type(e).__name__}: {e}"},
+            )
+            if effective_settings.allow_mock_fallback:
+                metadata = write_mock_research_artifacts(
+                    thread_dir=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    sources_meta=locals().get("sources_meta", []),
+                )
+                metadata["fallback_reason"] = f"{type(e).__name__}: {e}"
+                run_context.log(
+                    "run_completed", message="explicit mock fallback used", metadata=metadata
+                )
+                run_repository.set_warnings(
+                    thread_id,
+                    ["Explicit mock fallback used after model failure."],
+                )
+                run_repository.refresh_artifacts(thread_id)
+                _advance_to_building_evidence(run_repository, lifecycle, thread_id)
+                run_repository.set_output_summary(
+                    thread_id,
+                    budget_summary=read_budget_file(td / "budget.json"),
+                )
+                lifecycle.complete(
+                    require_review=bool(req.require_review),
+                    summary=("[MOCK OUTPUT] Explicit mock fallback completed after model failure."),
+                )
+                fallback_summary = (
+                    "[MOCK OUTPUT] Explicit mock fallback completed after model failure."
+                )
+                return {
+                    "thread_id": thread_id,
+                    "summary": fallback_summary,
+                    "strategy": strategy.to_json_dict() if strategy else None,
+                    "warnings": ["Explicit mock fallback used after model failure."],
+                    "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+                    "hint": f"Report should be at runs/{thread_id}/report.md",
+                    "mock": True,
+                    "budget": read_budget_file(td / "budget.json"),
+                    "run": run_summary(run_repository.get(thread_id)),
+                }
+            run_repository.record_error(thread_id, e, fail_run=True)
             warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+            for artifact in list_artifacts(settings.runs_dir, thread_id):
+                run_context.artifact_written(artifact.path, artifact.size_bytes)
+            run_context.log("run_failed", message=f"{type(e).__name__}: {e}")
+            run_repository.set_warnings(thread_id, warnings)
+            run_repository.refresh_artifacts(thread_id)
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -249,9 +608,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     "thread_id": thread_id,
                     "warnings": warnings,
                 },
-            )
-
-        _ensure_report_with_model(settings, td, req.question.strip(), sources_meta)
+            ) from e
 
         summary_text = ""
         if isinstance(result, dict) and "messages" in result and result["messages"]:
@@ -262,14 +619,215 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 summary_text = getattr(last, "content", "") or ""
 
         warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+        try:
+            rebuild_evidence_artifacts(td, thread_id=thread_id)
+        except Exception as e:
+            log.exception("evidence rebuild failed")
+            warnings.append(f"Evidence artifacts were not generated: {type(e).__name__}: {e}")
+        for artifact in list_artifacts(settings.runs_dir, thread_id):
+            run_context.artifact_written(artifact.path, artifact.size_bytes)
+        run_context.budget_warning()
+        run_context.log("run_completed", message="run completed")
+        run_repository.set_warnings(thread_id, warnings)
+        run_repository.refresh_artifacts(thread_id)
+        run_repository.set_output_summary(
+            thread_id, budget_summary=read_budget_file(td / "budget.json")
+        )
+        lifecycle.complete(require_review=bool(req.require_review), summary=summary_text)
 
         return {
             "thread_id": thread_id,
             "summary": summary_text,
+            "strategy": strategy.to_json_dict() if strategy else None,
             "warnings": warnings,
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
             "hint": f"Report should be at runs/{thread_id}/report.md",
+            "mock": False,
+            "budget": read_budget_file(td / "budget.json"),
+            "run": run_summary(run_repository.get(thread_id)),
         }
+
+    @app.post("/runs/{thread_id}/evidence/rebuild")
+    def evidence_rebuild(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+        try:
+            ledger = rebuild_evidence_artifacts(td, thread_id=thread_id)
+        except Exception as e:
+            log.exception("evidence rebuild failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+        return {
+            "thread_id": thread_id,
+            "warnings": warnings,
+            "coverage": ledger.coverage.model_dump()
+            if hasattr(ledger.coverage, "model_dump")
+            else ledger.coverage.dict(),
+            "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
+
+    @app.get("/runs")
+    def runs(
+        status: RunStatus | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        has_errors: bool | None = None,
+        review_status: ReviewState | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = RunListFilters(
+            status=status,
+            created_after=_normalize_dt(created_after),
+            created_before=_normalize_dt(created_before),
+            has_errors=has_errors,
+            review_status=review_status,
+        )
+        return [run_summary(item) for item in run_repository.list(filters)]
+
+    @app.get("/runs/cleanup/plan")
+    def cleanup_plan(
+        stale_after_hours: int = Query(default=24, ge=1),
+        max_dir_bytes: int = Query(default=50_000_000, ge=1),
+    ) -> dict[str, Any]:
+        return model_to_dict(
+            build_cleanup_plan(
+                run_repository,
+                stale_after_hours=stale_after_hours,
+                max_dir_bytes=max_dir_bytes,
+            )
+        )
+
+    @app.post("/runs/cleanup/apply")
+    def cleanup_apply(req: CleanupApplyRequest) -> dict[str, Any]:
+        plan = build_cleanup_plan(run_repository)
+        try:
+            applied = apply_cleanup_plan(
+                run_repository,
+                plan,
+                thread_ids=req.thread_ids,
+                confirm_delete=req.confirm_delete,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return model_to_dict(applied)
+
+    @app.get("/runs/{thread_id}")
+    def run_get(thread_id: str) -> dict[str, Any]:
+        try:
+            return run_detail(run_repository.get(thread_id))
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.post("/runs/{thread_id}/cancel")
+    def run_cancel(thread_id: str, req: RunCancellationRequest | None = None) -> dict[str, Any]:
+        try:
+            request = req or RunCancellationRequest()
+            run = run_repository.request_cancellation(thread_id, request)
+            return {
+                **run_detail(run),
+                "limitation": (
+                    "Cancellation is cooperative and checked between major stages; "
+                    "it cannot interrupt an in-flight synchronous agent.invoke call."
+                ),
+            }
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.get("/runs/{thread_id}/review")
+    def review_get(thread_id: str) -> dict[str, Any]:
+        try:
+            return model_to_dict(get_review(run_repository, thread_id))
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.post("/runs/{thread_id}/review/approve")
+    def review_approve(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
+        try:
+            return model_to_dict(
+                approve_review(
+                    run_repository,
+                    thread_id,
+                    reviewer=req.reviewer,
+                    notes=req.notes,
+                )
+            )
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except InvalidRunTransitionError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    @app.post("/runs/{thread_id}/review/request-changes")
+    def review_request_changes(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
+        try:
+            return model_to_dict(
+                request_changes(
+                    run_repository,
+                    thread_id,
+                    reviewer=req.reviewer,
+                    notes=req.notes,
+                    requested_changes=req.requested_changes,
+                )
+            )
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.post("/runs/{thread_id}/review/reject")
+    def review_reject(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
+        try:
+            return model_to_dict(
+                reject_review(
+                    run_repository,
+                    thread_id,
+                    reviewer=req.reviewer,
+                    notes=req.notes,
+                )
+            )
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.get("/runs/{thread_id}/events")
+    def run_events(thread_id: str) -> list[dict[str, Any]]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return read_event_file(td)
+
+    @app.get("/runs/{thread_id}/budget")
+    def run_budget(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        data = read_budget_file(td / "budget.json")
+        if not data:
+            raise HTTPException(status_code=404, detail="Budget not found")
+        return data
+
+    @app.post("/research-plan")
+    def research_plan(req: PlanRequest) -> dict[str, Any]:
+        urls = [u.strip() for u in req.urls if u and u.strip()]
+        return _strategy_response(
+            settings,
+            question=req.question.strip(),
+            urls=urls,
+            thread_id=req.thread_id,
+            persist=req.persist,
+        )
+
+    @app.post("/plan")
+    def plan(req: PlanRequest) -> dict[str, Any]:
+        urls = [u.strip() for u in req.urls if u and u.strip()]
+        return _strategy_response(
+            settings,
+            question=req.question.strip(),
+            urls=urls,
+            thread_id=req.thread_id,
+            persist=req.persist,
+        )
 
     @app.get("/threads/{thread_id}/artifacts")
     def artifacts(thread_id: str) -> list[dict[str, Any]]:
@@ -277,10 +835,12 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.get("/threads/{thread_id}/artifacts/{rel_path:path}")
     def artifact_download(thread_id: str, rel_path: str):
+        if rel_path in INTERNAL_FILES:
+            raise HTTPException(status_code=404, detail="Not found")
         try:
             ap = artifact_abs_path(settings.runs_dir, thread_id, rel_path)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         if not ap.exists() or ap.is_dir():
             raise HTTPException(status_code=404, detail="Not found")

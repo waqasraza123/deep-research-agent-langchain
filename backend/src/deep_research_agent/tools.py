@@ -19,6 +19,8 @@ class _TextAndLinksParser(HTMLParser):
         self._in_style = False
         self.text_parts: list[str] = []
         self.links: list[str] = []
+        self.link_records: list[dict[str, str]] = []
+        self._active_link_index: int | None = None
 
     def handle_starttag(self, tag, attrs):
         t = (tag or "").lower()
@@ -34,6 +36,8 @@ class _TextAndLinksParser(HTMLParser):
             for k, v in attrs:
                 if (k or "").lower() == "href" and v:
                     self.links.append(v)
+                    self.link_records.append({"href": v, "anchor_text": ""})
+                    self._active_link_index = len(self.link_records) - 1
 
     def handle_endtag(self, tag):
         t = (tag or "").lower()
@@ -41,6 +45,8 @@ class _TextAndLinksParser(HTMLParser):
             self._in_script = False
         elif t == "style":
             self._in_style = False
+        elif t == "a":
+            self._active_link_index = None
         elif t in {"p", "li"} or t.startswith("h"):
             self.text_parts.append("\n")
 
@@ -50,6 +56,9 @@ class _TextAndLinksParser(HTMLParser):
         s = (data or "").strip()
         if s:
             self.text_parts.append(s)
+            if self._active_link_index is not None:
+                current = self.link_records[self._active_link_index].get("anchor_text", "")
+                self.link_records[self._active_link_index]["anchor_text"] = (current + " " + s).strip()
 
 
 def _normalize_text(text: str) -> str:
@@ -87,13 +96,18 @@ def html_to_text(html: str) -> str:
 
 
 def extract_links(html: str, base_url: str, *, limit: int = 50) -> list[str]:
+    return [item["url"] for item in extract_link_records(html, base_url, limit=limit)]
+
+
+def extract_link_records(html: str, base_url: str, *, limit: int = 50) -> list[dict[str, str]]:
     parser = _TextAndLinksParser()
     parser.feed(html)
 
-    out: list[str] = []
+    out: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    for href in parser.links:
+    for record in parser.link_records:
+        href = record.get("href") or ""
         abs_url = urljoin(base_url, href)
         abs_url, _ = urldefrag(abs_url)
 
@@ -104,7 +118,7 @@ def extract_links(html: str, base_url: str, *, limit: int = 50) -> list[str]:
         if abs_url in seen:
             continue
         seen.add(abs_url)
-        out.append(abs_url)
+        out.append({"url": abs_url, "anchor_text": _normalize_text(record.get("anchor_text") or "")})
 
         if len(out) >= limit:
             break
@@ -118,6 +132,25 @@ def extract_title(html: str) -> str | None:
         return None
     t = re.sub(r"\s+", " ", m.group(1)).strip()
     return t or None
+
+
+def extract_canonical_url(html: str, base_url: str) -> str | None:
+    m = re.search(
+        r"<link\b[^>]*rel=[\"'][^\"']*\bcanonical\b[^\"']*[\"'][^>]*>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    tag = m.group(0)
+    href = re.search(r"href=[\"']([^\"']+)[\"']", tag, flags=re.IGNORECASE)
+    if not href:
+        return None
+    canonical, _ = urldefrag(urljoin(base_url, href.group(1)))
+    p = urlparse(canonical)
+    if p.scheme not in ("http", "https"):
+        return None
+    return canonical
 
 
 def _is_ip_blocked(ip: ipaddress._BaseAddress) -> bool:
@@ -265,6 +298,8 @@ class FetchResult:
     word_count: int
     char_count: int
     kind: str
+    canonical_url: Optional[str] = None
+    extracted_links: tuple[dict[str, str], ...] = ()
 
 
 def _fetch_bytes(url: str, *, timeout_s: float, max_bytes: int) -> tuple[bytes, str, int, str, bool]:
@@ -340,6 +375,8 @@ def fetch_document(
     if kind == "html":
         raw = data.decode("utf-8", errors="replace")
         title = extract_title(raw)
+        canonical_url = extract_canonical_url(raw, final_url)
+        extracted_links = tuple(extract_link_records(raw, final_url, limit=200))
         extracted = html_to_text(raw)
         extracted = _normalize_text(extracted)
         wc = _word_count(extracted)
@@ -380,6 +417,8 @@ def fetch_document(
             word_count=_word_count(extracted),
             char_count=len(extracted),
             kind=kind,
+            canonical_url=canonical_url,
+            extracted_links=extracted_links,
         )
 
     if kind in {"txt", "md", "csv"}:

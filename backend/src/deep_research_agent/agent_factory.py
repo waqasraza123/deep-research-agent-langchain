@@ -12,6 +12,9 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .model import create_chat_model
+from .runtime.budgets import BudgetExceeded
+from .runtime.mock_model import MockResearchAgent
+from .runtime.run_context import RunContext
 from .settings import Settings
 from .tools import fetch_document
 
@@ -49,13 +52,17 @@ class AgentService:
         max_sources: int = 1,
         max_links_per_source: int = 0,
         follow_links: bool = False,
+        run_context: RunContext | None = None,
     ):
         max_sources = max(0, min(int(max_sources), 3))
         max_links_per_source = max(0, min(int(max_links_per_source), 10))
-        follow_links = bool(follow_links and max_sources > 1 and max_links_per_source > 0)
+        follow_links = bool(follow_links and max_links_per_source > 0)
+        effective_source_limit = max_sources
+        if follow_links:
+            effective_source_limit = min(23, max_sources + (max_sources * max_links_per_source))
 
         limits = ResearchLimits(
-            max_sources=max_sources,
+            max_sources=effective_source_limit,
             max_links_per_source=max_links_per_source,
             follow_links=follow_links,
         )
@@ -64,6 +71,9 @@ class AgentService:
         thread_dir = (self.settings.runs_dir / thread_id).resolve()
         sources_dir = (thread_dir / "sources").resolve()
         sources_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.settings.model_provider == "mock":
+            return MockResearchAgent(thread_dir=thread_dir, thread_id=thread_id)
 
         seen_urls: set[str] = set()
 
@@ -74,7 +84,7 @@ class AgentService:
             return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
         def fetch_and_store(url: str) -> str:
-            """Fetch a URL, store extracted text to runs/<thread_id>/sources, return compact JSON metadata."""
+            """Fetch a URL, store extracted text, and return compact JSON metadata."""
             if url not in seen_urls and len(seen_urls) >= limits.max_sources:
                 return json.dumps({"ok": False, "error": "source limit reached", "url": url})
 
@@ -94,6 +104,8 @@ class AgentService:
                     pass
 
             try:
+                if run_context:
+                    run_context.source_fetch_started(url)
                 fr = fetch_document(
                     url,
                     timeout_s=self.settings.http_timeout_s,
@@ -101,7 +113,13 @@ class AgentService:
                     min_words=160,
                     min_chars=1200,
                 )
+            except BudgetExceeded as e:
+                if run_context:
+                    run_context.budget_exceeded(e)
+                return json.dumps({"ok": False, "error": str(e), "url": url})
             except Exception as e:
+                if run_context:
+                    run_context.source_fetch_failed(url, f"{type(e).__name__}: {e}")
                 return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}", "url": url})
 
             txt_path.write_text(fr.extracted_text, encoding="utf-8")
@@ -119,10 +137,22 @@ class AgentService:
                 "strategy": fr.strategy,
                 "word_count": fr.word_count,
                 "char_count": fr.char_count,
+                "canonical_url": fr.canonical_url,
+                "document_kind": fr.kind,
             }
 
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             seen_urls.add(url)
+            if run_context:
+                run_context.source_fetch_completed(url, meta)
+                run_context.artifact_written(
+                    f"sources/{url_hash}.txt",
+                    txt_path.stat().st_size if txt_path.exists() else None,
+                )
+                run_context.artifact_written(
+                    f"sources/{url_hash}.json",
+                    meta_path.stat().st_size if meta_path.exists() else None,
+                )
             return json.dumps(meta, ensure_ascii=False)
 
         system_prompt = f"""You must create these files in {run_dir}:

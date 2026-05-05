@@ -48,25 +48,51 @@ def _clamp_int(v: int, lo: int, hi: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    model_provider: str
-    temperature: float
+    model_provider: str = "openai"
+    temperature: float = 0.2
 
-    ollama_model: str
-    ollama_num_predict: int
+    ollama_model: str = "llama3.1"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_num_predict: int = 220
+    ollama_max_context_tokens: int = 8_192
 
-    openai_base_url: str
-    openai_api_key: str
-    openai_model: str
-    openai_max_tokens: int
-    openai_timeout_s: float
-    openai_max_retries: int
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5-mini"
+    openai_max_tokens: int = 350
+    openai_timeout_s: float = 60.0
+    openai_max_retries: int = 1
+    openai_max_context_tokens: int = 128_000
+    llamacpp_max_context_tokens: int = 8_192
 
-    runs_dir: Path
-    max_page_chars: int
-    http_timeout_s: float
+    runs_dir: Path = REPO_ROOT / "runs"
+    max_page_chars: int = 15_000
+    http_timeout_s: float = 20.0
 
-    host: str
-    port: int
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+    mock_model_name: str = "deterministic-mock-research-model"
+    allow_mock_fallback: bool = False
+
+    budget_max_model_calls: int = 25
+    budget_max_source_fetches: int = 3
+    budget_max_generated_chars: int = 80_000
+    budget_max_runtime_seconds: float = 180.0
+    budget_max_artifacts_size: int = 5_000_000
+    budget_max_crawl_expansion: int = 10
+
+    def default_budget(self):
+        from .runtime.contracts import RunBudget
+
+        return RunBudget(
+            max_model_calls=self.budget_max_model_calls,
+            max_source_fetches=self.budget_max_source_fetches,
+            max_generated_chars=self.budget_max_generated_chars,
+            max_runtime_seconds=self.budget_max_runtime_seconds,
+            max_artifacts_size=self.budget_max_artifacts_size,
+            max_crawl_expansion=self.budget_max_crawl_expansion,
+        )
 
     @staticmethod
     def load() -> "Settings":
@@ -88,7 +114,11 @@ class Settings:
             temperature=_env_float("TEMPERATURE", 0.2),
 
             ollama_model=_env_str("OLLAMA_MODEL", "llama3.1"),
+            ollama_base_url=_env_str("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_num_predict=_clamp_int(_env_int("OLLAMA_NUM_PREDICT", 220), 50, 800),
+            ollama_max_context_tokens=_clamp_int(
+                _env_int("OLLAMA_MAX_CONTEXT_TOKENS", 8192), 1024, 262144
+            ),
 
             openai_base_url=openai_base_url,
             openai_api_key=openai_api_key,
@@ -96,6 +126,12 @@ class Settings:
             openai_max_tokens=openai_max_tokens,
             openai_timeout_s=openai_timeout_s,
             openai_max_retries=openai_max_retries,
+            openai_max_context_tokens=_clamp_int(
+                _env_int("OPENAI_MAX_CONTEXT_TOKENS", 128000), 4096, 2_000_000
+            ),
+            llamacpp_max_context_tokens=_clamp_int(
+                _env_int("LLAMACPP_MAX_CONTEXT_TOKENS", 8192), 1024, 262144
+            ),
 
             runs_dir=REPO_ROOT / "runs",
             max_page_chars=max_page_chars,
@@ -103,4 +139,20 @@ class Settings:
 
             host=_env_str("HOST", "127.0.0.1"),
             port=_env_int("PORT", 8000),
+
+            mock_model_name=_env_str("MOCK_MODEL_NAME", "deterministic-mock-research-model"),
+            allow_mock_fallback=_env_str("ALLOW_MOCK_FALLBACK", "false").lower()
+            in ("1", "true", "yes"),
+            budget_max_model_calls=_clamp_int(_env_int("BUDGET_MAX_MODEL_CALLS", 25), 0, 1000),
+            budget_max_source_fetches=_clamp_int(_env_int("BUDGET_MAX_SOURCE_FETCHES", 3), 0, 1000),
+            budget_max_generated_chars=_clamp_int(
+                _env_int("BUDGET_MAX_GENERATED_CHARS", 80000), 0, 10_000_000
+            ),
+            budget_max_runtime_seconds=_env_float("BUDGET_MAX_RUNTIME_SECONDS", 180.0),
+            budget_max_artifacts_size=_clamp_int(
+                _env_int("BUDGET_MAX_ARTIFACTS_SIZE", 5_000_000), 0, 500_000_000
+            ),
+            budget_max_crawl_expansion=_clamp_int(
+                _env_int("BUDGET_MAX_CRAWL_EXPANSION", 10), 0, 1000
+            ),
         )
