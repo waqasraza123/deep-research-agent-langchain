@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import SourceIdentity
+
 RecommendedUsage = Literal[
     "cite_directly",
     "use_as_background",
@@ -80,6 +82,7 @@ class CitationReadiness(BaseModel):
 
 class SourceAudit(BaseModel):
     source_id: str
+    source_identity: SourceIdentity | None = None
     url: str
     domain: str
     title: str | None = None

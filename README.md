@@ -21,17 +21,49 @@ The integrated backend lifecycle is:
 7. Write `sources.json`, `source_graph.json`, `source_graph.md`, and source quality metadata.
 8. Audit fetched sources for credibility, freshness, authority, bias risk, primary-source
    likelihood, and citation readiness.
-9. Run the model/agent layer, or deterministic mock mode, with orchestration and source-audit
-   instructions.
-10. Guarantee `plan.md`, `notes.md`, `sources.json`, and `report.md` exist.
-11. Index successful fetched sources into local SQLite memory and write memory graph artifacts.
-12. Build evidence artifacts from notes, report, and captured sources.
-13. Build deterministic synthesis artifacts and, when safe, replace `report.md` with an
+9. Build a local retrieval index, generate retrieval queries, rank source chunks, and write
+   context-pack artifacts for the agent.
+10. Run the model/agent layer, or deterministic mock mode, with orchestration, document,
+   source-audit, and retrieval context instructions.
+11. Guarantee `plan.md`, `notes.md`, `sources.json`, and `report.md` exist.
+12. Index successful fetched sources into local SQLite memory and write memory graph artifacts.
+13. Build evidence artifacts from notes, report, and captured sources.
+14. Run deterministic active verification over the report, evidence ledger, source audit,
+    retrieval/context artifacts when present, and local source text. This writes verification
+    tasks, results, confidence calibration, and claim rewrite suggestions without changing
+    `report.md`.
+15. Build deterministic synthesis artifacts and, when safe, replace `report.md` with an
     assembled report while preserving the original as `report.raw.md`.
-14. Build deterministic research quality evaluation artifacts from the report, evidence ledger,
+16. Build deterministic research quality evaluation artifacts from the report, evidence ledger,
     source audit, synthesis outputs, and available source text.
-15. Persist `events.jsonl`, `events.md`, and `budget.json`.
-16. Mark the run completed, failed, cancelled, or waiting for review.
+17. Persist `events.jsonl`, `events.md`, and `budget.json`.
+18. Mark the run completed, failed, cancelled, or waiting for review.
+
+## Domain Protocols And Intelligence Profiles
+
+The backend selects a deterministic research protocol at the start of every `/run`. Protocols live
+under `deep_research_agent.protocols` and define source requirements, verification strictness,
+citation policy, freshness handling, synthesis shape, evaluation weights, safety warnings, and
+review-gate recommendations.
+
+Built-in protocols cover general research, technical due diligence, software/framework comparison,
+implementation planning, source-code or library review, legal/policy review, market research,
+vendor evaluation, academic literature review, financial or investment risk review, medical or
+health information review, and news/current-events review.
+
+Sensitive protocols are intentionally conservative. Legal, medical, and financial research is
+informational only, requires stronger source and citation policies, and recommends qualified human
+review before use. The backend does not provide professional advice.
+
+Intelligence profiles include `fast_brief`, `balanced_research`, `deep_research`,
+`conservative_verification`, `technical_architect`, `citation_strict`, `primary_sources_only`, and
+`offline_mock`. Profiles set source limits, chunk budgets, default link-following, source discovery
+posture, synthesis/evaluation expectations, citation strictness, review recommendations, and report
+length preference.
+
+Policy packs are validated JSON definitions under
+`backend/src/deep_research_agent/protocols/packs/`. Add new packs there to extend shared policy
+rules and warnings without editing `/run`.
 
 ## Generated Artifacts
 
@@ -45,10 +77,23 @@ Required core artifacts:
 Intelligence and traceability artifacts:
 
 - `run.json`
+- `protocol_selection.json`
+- `protocol_selection.md`
+- `intelligence_profile.json`
+- `protocol_instructions.md`
+- `policy_requirements.json`
+- `policy_warnings.md`
 - `strategy.json`
 - `strategy.md`
 - `subquestions.json`
 - `verification_plan.md`
+- `source_acquisition_plan.json`
+- `source_acquisition_plan.md`
+- `search_queries.json`
+- `source_candidates.json`
+- `source_selection.json`
+- `source_discovery_summary.md`
+- `source_discovery.md`
 - `task_graph.json`
 - `task_graph.md`
 - `stage_outputs.json`
@@ -62,6 +107,18 @@ Intelligence and traceability artifacts:
 - `source_rankings.json`
 - `source_warnings.md`
 - `citation_readiness.json`
+- `document_profiles.json`
+- `document_profiles.md`
+- `document_chunks.jsonl`
+- `document_tables.json`
+- `document_citations.json`
+- `document_warnings.md`
+- `retrieval_index.json`
+- `retrieval_queries.json`
+- `retrieval_results.json`
+- `context_packs.json`
+- `context_packs.md`
+- `retrieval_coverage.md`
 - `memory_context.json`
 - `memory_context.md`
 - `memory_graph.json`
@@ -72,6 +129,13 @@ Intelligence and traceability artifacts:
 - `contradictions.md`
 - `citation_map.json`
 - `evidence_coverage.json`
+- `verification_plan.json`
+- `verification_tasks.json`
+- `verification_results.json`
+- `verification_report.md`
+- `confidence_calibration.json`
+- `confidence_calibration.md`
+- `claim_rewrite_suggestions.md`
 - `synthesis_input.json`
 - `synthesis_output.json`
 - `findings.json`
@@ -95,11 +159,140 @@ Intelligence and traceability artifacts:
 - `hallucination_risk.md`
 - `quality_score.json`
 - `quality_score.md`
+- `intelligence_summary.json`
+- `intelligence_summary.md`
+- `intelligence_pipeline_summary.json`
+- `intelligence_pipeline_summary.md`
 - `events.jsonl`
 - `events.md`
 - `budget.json`
 
+Fetched source manifests use a stable `source_identity` object where possible. Document and
+retrieval artifacts add stable `document_identity` and `chunk_identity` objects derived from the
+source identity, normalized content hash, offsets, and section path. These ids let source
+discovery, fetching, document intelligence, retrieval, verification, synthesis, and evaluation
+refer to the same source and chunk consistently.
+
 Fetched source text and metadata live under `runs/<thread_id>/sources/`.
+
+## Source Discovery
+
+The backend includes a deterministic source discovery subsystem under
+`deep_research_agent.source_discovery`. It turns a research question into an auditable source
+acquisition plan before fetching:
+
+- research-aware query expansion for overview, primary-source, official-docs, current,
+  comparison, failure-mode, benchmark, legal/policy, academic, and implementation searches
+- source type planning across official docs, repositories, release notes, papers, government or
+  legal sources, announcements, benchmarks, blogs, forums, and datasets
+- pluggable provider interface with `disabled`, `mock`, and `static` providers
+- deterministic candidate dedupe, ranking, bounded selection, and transparent selection reasons
+
+Discovery is disabled by default and never performs hidden live web search. If it is disabled, or
+no provider is configured, `/run` still continues with user-provided URLs and writes
+`source_discovery.md` / `source_discovery_summary.md` explaining why discovery was skipped.
+
+Enable offline mock discovery for development or tests:
+
+```bash
+SOURCE_DISCOVERY_ENABLED=true
+SOURCE_DISCOVERY_PROVIDER=mock
+```
+
+Or pass per request:
+
+```json
+{
+  "question": "Compare LangGraph and CrewAI for a production research agent backend",
+  "source_discovery": {
+    "discovery_enabled": true,
+    "provider": "mock",
+    "max_queries": 4,
+    "max_candidates_per_query": 3,
+    "max_selected_sources": 2
+  }
+}
+```
+
+`static` provider mode accepts locally configured result dictionaries through the typed
+`SourceDiscoverySettings.static_results` field. Live provider adapters such as Tavily, SerpAPI,
+Bing, Brave, or custom search can be added behind the provider interface later; they should remain
+disabled unless explicitly configured.
+
+Backend routes:
+
+- `POST /source-discovery/plan`
+- `POST /source-discovery/preview`
+- `GET /runs/{thread_id}/source-discovery`
+
+Discovered sources are merged with user-provided URLs only after selection. Fetched manifests mark
+automatic sources with `source_kind: "auto_discovered"` and keep the discovery candidate id,
+provider, query, source type hint, and ranking rationale in the discovery artifacts.
+
+## Document Intelligence
+
+After source fetching and before agent execution, the backend converts successful fetched source
+text into deterministic `DocumentProfile` records. This subsystem lives under
+`backend/src/deep_research_agent/document_intelligence/` and performs offline normalization,
+section detection, chunking, table extraction, conservative citation/footnote extraction, content
+feature detection, and operator-readable artifact writing.
+
+Document intelligence preserves raw source traceability. It does not replace `sources.json` or the
+raw `runs/<thread_id>/sources/*.txt` files; it adds normalized structure and chunk metadata for
+retrieval, evidence extraction, and synthesis. The agent receives a concise document context block
+with source titles, section/chunk previews, readable tables, extraction warnings, and detected
+features.
+
+Endpoints:
+
+- `POST /document-intelligence/profile`
+- `GET /runs/{thread_id}/documents`
+- `GET /runs/{thread_id}/chunks`
+- `GET /runs/{thread_id}/tables`
+
+Limitations: this is deterministic heuristic parsing, not perfect document understanding. PDF
+headers/footers, legal citations, academic references, table boundaries, and section hierarchy can
+be ambiguous. Confidence scores and warnings are included so downstream code can treat weak
+extractions cautiously.
+
+## Local Retrieval And Context Packs
+
+The backend includes an offline retrieval subsystem under
+`backend/src/deep_research_agent/retrieval/`. It indexes successful fetched source text into
+typed `RetrievalDocument` and `RetrievalChunk` records, then performs local hybrid ranking over
+plain Python data structures. No vector database, OpenAI API, Ollama server, or hidden network
+call is required.
+
+The first ranking path is deterministic lexical retrieval: tokenization, stopword removal,
+BM25-style scoring, exact phrase matching, entity overlap, numeric/date overlap, section/title
+boosts, source quality boosts, citation-readiness boosts, freshness handling, source diversity,
+and near-duplicate penalties. Embeddings are represented by provider interfaces only:
+`DisabledEmbeddingProvider` is the default, `MockEmbeddingProvider` supports offline tests, and
+live providers are placeholders for future work.
+
+Before agent execution, the backend generates retrieval queries for the main question,
+subquestions, named entities, comparison dimensions, risk/failure-mode terms, freshness terms,
+and citation verification. It then writes:
+
+- `retrieval_index.json`
+- `retrieval_queries.json`
+- `retrieval_results.json`
+- `context_packs.json`
+- `context_packs.md`
+- `retrieval_coverage.md`
+
+Context packs are compact, citation-ready slices of fetched source text. The current pack types are
+`agent_context_pack`, `evidence_context_pack`, `synthesis_context_pack`, and
+`verification_context_pack`. Each item preserves `chunk_id`, `source_id`, URL, title, section path,
+relevance reason, citation hint, warnings, and score reasons so downstream evidence extraction and
+synthesis remain traceable to source chunks.
+
+Retrieval endpoints:
+
+- `POST /retrieval/search`
+- `POST /runs/{thread_id}/retrieval/rebuild`
+- `GET /runs/{thread_id}/context-packs`
+- `GET /runs/{thread_id}/retrieval-results`
 
 ## Research Memory
 
@@ -143,6 +336,34 @@ read as auditable planning context, not expert truth. High-stakes, date-sensitiv
 medical, financial, policy, comparative, and technical due diligence questions receive stricter
 routing and conservative confidence instructions.
 
+## Active Verification
+
+The backend includes an offline active verification subsystem under
+`deep_research_agent.verification`. After evidence artifacts are built, it acts as a skeptical
+reviewer over `report.md`, `notes.md`, `sources.json`, local source text, and any available
+`evidence_ledger.json`, `source_audit.json`, `context_packs.json`, `evaluation.json`, or synthesis
+artifacts.
+
+It detects weak or risky claims, including unsupported numbers and dates, missing citations,
+recommendations without evidence, source-audit warnings, stale-source risk, contradictions,
+missing counterarguments, unclear assumptions, and overconfident language. It then creates bounded
+fact-check tasks, verifies them against local artifacts only, calibrates report confidence, and
+suggests safer rewrites. The first version does not make live web calls, does not call an LLM, and
+does not silently replace report text.
+
+Verification endpoints:
+
+- `POST /runs/{thread_id}/verification/rebuild`
+- `GET /runs/{thread_id}/verification`
+- `GET /runs/{thread_id}/confidence-calibration`
+- `GET /runs/{thread_id}/claim-rewrite-suggestions`
+- `GET /runs/{thread_id}/intelligence-pipeline-summary`
+
+Set `VERIFICATION_ENABLED=false` to skip automatic verification. Set
+`VERIFICATION_GATE_ENABLED=true` to require review when high-priority unsupported, contradicted, or
+unresolved verification issues remain. Because verification is deterministic and local, an
+unsupported result means “not supported by captured artifacts,” not “false on the public web.”
+
 ## Mock Mode
 
 Mock mode is deterministic, offline, and suitable for tests or orchestration checks:
@@ -162,6 +383,31 @@ MODEL_PROVIDER=mock
 Mock output is clearly marked and is not factual research. Mock fallback is only used when
 `ALLOW_MOCK_FALLBACK=true` or request field `allow_mock_fallback=true` is set.
 
+## Offline Configuration
+
+The intelligence pipeline is enabled by default but offline-safe. It uses deterministic protocols,
+heuristic document parsing, lexical retrieval, and local verification without external search,
+embedding, OpenAI, or Ollama calls unless explicitly configured.
+
+Useful settings:
+
+- `PROTOCOL_SELECTION_ENABLED=true`
+- `INTELLIGENCE_PROFILE=balanced_research`
+- `SOURCE_DISCOVERY_ENABLED=false`
+- `SOURCE_DISCOVERY_PROVIDER=disabled` or `mock`
+- `MAX_DISCOVERY_QUERIES=8`
+- `MAX_SELECTED_DISCOVERED_SOURCES=3`
+- `DOCUMENT_INTELLIGENCE_ENABLED=true`
+- `CHUNK_MAX_CHARS=3200`
+- `CHUNK_OVERLAP_CHARS=300`
+- `RETRIEVAL_ENABLED=true`
+- `EMBEDDING_PROVIDER=disabled`
+- `CONTEXT_PACK_MAX_CHARS=11000`
+- `VERIFICATION_ENABLED=true`
+- `VERIFICATION_GATE_ENABLED=false`
+- `MAX_VERIFICATION_TASKS=12`
+- `CONFIDENCE_THRESHOLD_FOR_REVIEW=0.55`
+
 ## Source Expansion
 
 Source expansion is safe by default:
@@ -175,6 +421,18 @@ Source expansion is safe by default:
 
 `source_graph.json` and `source_graph.md` explain fetched, skipped, duplicate, and discovered
 links, including quality scores and parent-child relationships.
+
+Protocol selection can influence source behavior. Stricter profiles can default to source
+expansion when configured, current-events and sensitive protocols require freshness caveats, and
+primary-source-oriented protocols tell discovery and audit stages to prefer official, legal,
+clinical, filing, code, or documentation sources when available.
+
+Protocol endpoints:
+
+- `GET /protocols`
+- `POST /protocols/select`
+- `GET /profiles`
+- `GET /runs/{thread_id}/protocol`
 
 ## Source Audit
 
@@ -323,6 +581,27 @@ OPENAI_BASE_URL=http://localhost:8080/v1
 OPENAI_MODEL=local-model
 ```
 
+Backend intelligence feature flags default to enabled and remain offline/deterministic unless the
+model provider itself is remote:
+
+```bash
+MEMORY_ENABLED=true
+SOURCE_REUSE_ENABLED=true
+SOURCE_AUDIT_ENABLED=true
+ORCHESTRATION_ENABLED=true
+SYNTHESIS_ENABLED=true
+EVALUATION_ENABLED=true
+MAX_MEMORY_RESULTS=20
+SOURCE_SCORING_THRESHOLD=0.45
+EVALUATION_THRESHOLD=0.65
+BENCHMARK_PATH=backend/benchmarks
+```
+
+`intelligence_summary.json` and `intelligence_summary.md` are generated at the end of a run as the
+operator-facing rollup across memory, orchestration, source audit, synthesis, and evaluation. They
+summarize top sources, warnings, coverage gaps, hallucination risk, generated artifacts, and
+recommended follow-up actions.
+
 ## API
 
 Useful endpoints:
@@ -342,14 +621,21 @@ Useful endpoints:
 - `GET /runs/{thread_id}/artifacts/{artifact_name}`
 - `GET /runs/{thread_id}/events`
 - `GET /runs/{thread_id}/budget`
+- `GET /runs/{thread_id}/memory`
 - `POST /source-audit`
 - `GET /runs/{thread_id}/source-audit`
 - `GET /runs/{thread_id}/citation-readiness`
+- `POST /retrieval/search`
+- `POST /runs/{thread_id}/retrieval/rebuild`
+- `GET /runs/{thread_id}/context-packs`
+- `GET /runs/{thread_id}/retrieval-results`
 - `POST /runs/{thread_id}/evidence/rebuild`
 - `POST /runs/{thread_id}/synthesis/rebuild`
+- `GET /runs/{thread_id}/synthesis`
 - `POST /runs/{thread_id}/evaluation/rebuild`
 - `GET /runs/{thread_id}/evaluation`
 - `GET /runs/{thread_id}/quality-score`
+- `GET /runs/{thread_id}/intelligence-summary`
 - `POST /benchmarks/run`
 - `GET /benchmarks/cases`
 - `GET /runs/{thread_id}/argument-map`

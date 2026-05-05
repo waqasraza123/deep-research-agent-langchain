@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from deep_research_agent.source_identity import source_identity_from_dict, source_identity_to_dict
+
 
 @dataclass(frozen=True)
 class CrawlSettings:
@@ -77,6 +79,8 @@ class SourceRecord:
     discovered_anchor_text: str = ""
     quality_score: QualityScore | None = None
     source_id: str | None = None
+    source_domain: str | None = None
+    content_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -86,6 +90,10 @@ class SourceRecord:
         else:
             data["quality_score"] = None
             data["final_quality_score"] = None
+        identity = source_identity_from_dict(data)
+        data["source_id"] = identity.source_id
+        data["source_domain"] = identity.domain
+        data["source_identity"] = source_identity_to_dict(identity)
         return data
 
 

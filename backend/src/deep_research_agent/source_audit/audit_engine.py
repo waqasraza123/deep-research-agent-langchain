@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
@@ -8,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from deep_research_agent.source_identity import source_identity_from_dict
 
 from ._heuristics import clamp, first_nonempty, host_domain
 from .authority import score_authority
@@ -190,11 +191,10 @@ def audit_source(
     now: datetime | None = None,
 ) -> SourceAudit:
     url = first_nonempty(source.get("final_url"), source.get("canonical_url"), source.get("url"))
+    identity = source_identity_from_dict(source)
     title = first_nonempty(source.get("title")) or None
-    source_id = (
-        first_nonempty(source.get("source_id")) or f"S-{hashlib.sha1(url.encode()).hexdigest()[:8]}"
-    )
-    domain = host_domain(url)
+    source_id = first_nonempty(source.get("source_id")) or identity.source_id
+    domain = identity.domain or host_domain(url)
     text = _safe_source_text(source, thread_dir)
     word_count = int(source.get("word_count") or _word_count(text))
     source_type = _source_type(source, url)
@@ -257,6 +257,7 @@ def audit_source(
     ]
     return SourceAudit(
         source_id=source_id,
+        source_identity=identity,
         url=url,
         domain=domain,
         title=title,

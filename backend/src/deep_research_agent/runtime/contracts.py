@@ -10,6 +10,9 @@ HealthStatus = Literal["configured", "degraded", "unavailable", "mock"]
 RunEventType = Literal[
     "run_started",
     "strategy_created",
+    "protocol_selected",
+    "source_discovery_completed",
+    "source_discovery_selected",
     "source_fetch_started",
     "source_fetch_completed",
     "source_fetch_failed",

@@ -111,7 +111,32 @@ def test_mock_run_writes_intelligent_artifacts_and_public_run_snapshot(client):
     assert "source_graph.md" in paths
     assert "evidence_ledger.json" in paths
     assert "evidence_coverage.json" in paths
+    assert "intelligence_summary.json" in paths
+    assert "intelligence_summary.md" in paths
+    assert "intelligence_pipeline_summary.json" in paths
+    assert "intelligence_pipeline_summary.md" in paths
 
     run_snapshot = client.get(f"/runs/{tid}/artifacts/run.json")
     assert run_snapshot.status_code == 200
     assert run_snapshot.json()["thread_id"] == tid
+
+    for rel in ("memory", "task-graph", "source-audit", "synthesis", "evaluation"):
+        endpoint = client.get(f"/runs/{tid}/{rel}")
+        assert endpoint.status_code == 200
+
+    summary = client.get(f"/runs/{tid}/intelligence-summary")
+    assert summary.status_code == 200
+    assert summary.json()["thread_id"] == tid
+
+    pipeline_summary = client.get(f"/runs/{tid}/intelligence-pipeline-summary")
+    assert pipeline_summary.status_code == 200
+    pipeline_body = pipeline_summary.json()
+    assert pipeline_body["thread_id"] == tid
+    expected_stages = {
+        "protocol_selection",
+        "source_discovery",
+        "document_intelligence",
+        "retrieval",
+        "verification",
+    }
+    assert expected_stages <= {stage["stage"] for stage in pipeline_body["stages"]}
