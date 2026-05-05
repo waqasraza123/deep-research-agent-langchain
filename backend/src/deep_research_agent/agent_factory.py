@@ -16,6 +16,7 @@ from .runtime.budgets import BudgetExceeded
 from .runtime.mock_model import MockResearchAgent
 from .runtime.run_context import RunContext
 from .settings import Settings
+from .source_safety import assess_source_text, source_trust_boundary_instructions
 from .tools import fetch_document
 
 
@@ -142,6 +143,35 @@ class AgentService:
                 "document_kind": fr.kind,
             }
 
+            sanitized_dir = thread_dir / "sanitized_sources"
+            sanitized_dir.mkdir(parents=True, exist_ok=True)
+            sanitized_path = sanitized_dir / f"{url_hash}.txt"
+            assessment = assess_source_text(
+                text=fr.extracted_text,
+                source=meta,
+                raw_local_path=f"runs/{thread_id}/sources/{url_hash}.txt",
+                sanitized_local_path=f"runs/{thread_id}/sanitized_sources/{url_hash}.txt",
+            )
+            sanitized_path.write_text(
+                assessment.sanitized_content.sanitized_text,
+                encoding="utf-8",
+            )
+            meta["raw_local_path"] = meta["local_path"]
+            meta["sanitized_local_path"] = assessment.sanitized_content.sanitized_local_path
+            meta["source_safety"] = {
+                "risk_level": assessment.risk_score.risk_level,
+                "numeric_score": assessment.risk_score.numeric_score,
+                "recommended_action": assessment.risk_score.recommended_action,
+                "agent_context_allowed": assessment.sanitized_content.agent_context_allowed,
+                "report_allowed": assessment.sanitized_content.report_allowed,
+                "sanitized_local_path": assessment.sanitized_content.sanitized_local_path,
+                "prompt_injection_findings": len(assessment.prompt_injection_findings),
+                "source_poisoning_findings": len(assessment.source_poisoning_findings),
+                "reasons": assessment.risk_score.reasons,
+            }
+            if not assessment.sanitized_content.agent_context_allowed:
+                meta["local_path"] = assessment.sanitized_content.sanitized_local_path
+
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             seen_urls.add(url)
             if run_context:
@@ -164,6 +194,7 @@ class AgentService:
 
 Rules:
 - Use only information from fetched sources.
+- {source_trust_boundary_instructions()}
 - For each provided URL, call fetch_and_store(url).
 - notes.md must include source_id labels S1, S2...
 - sources.json must be valid JSON.

@@ -207,6 +207,19 @@ def _safe_source_path(thread_dir: Path, local_path: str | None) -> Path | None:
     return candidate
 
 
+def _safe_context_source_path(thread_dir: Path, source: dict[str, Any]) -> Path | None:
+    safety = source.get("source_safety")
+    if isinstance(safety, dict):
+        if safety.get("agent_context_allowed") is False or safety.get("risk_level") == "critical":
+            return None
+        sanitized = safety.get("sanitized_local_path") or source.get("sanitized_local_path")
+        if sanitized:
+            return _safe_source_path(thread_dir, str(sanitized))
+    if source.get("sanitized_local_path"):
+        return _safe_source_path(thread_dir, str(source.get("sanitized_local_path")))
+    return _safe_source_path(thread_dir, source.get("local_path"))
+
+
 def build_document_intelligence_batch(
     *,
     thread_dir: Path,
@@ -222,12 +235,15 @@ def build_document_intelligence_batch(
         if source.get("ok") is not True or source.get("skipped"):
             continue
         source_id, _, _, _, _ = source_basics(source)
-        source_path = _safe_source_path(thread_dir, source.get("local_path"))
+        source_path = _safe_context_source_path(thread_dir, source)
         if source_path is None or not source_path.exists() or source_path.is_dir():
             warnings.append(
                 DocumentExtractionWarning(
                     code="missing_source_text",
-                    message="Source metadata did not point to a readable local text artifact.",
+                    message=(
+                        "Source metadata did not point to a readable context-safe text artifact, "
+                        "or source safety excluded it from agent context."
+                    ),
                     source_id=source_id,
                     severity="error",
                 )

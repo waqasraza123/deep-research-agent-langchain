@@ -172,6 +172,19 @@ def _resolve_local_path(run_dir: Path, local_path: str | None) -> Path | None:
     return path
 
 
+def _source_safety(item: dict[str, Any]) -> dict[str, Any]:
+    safety = item.get("source_safety")
+    return safety if isinstance(safety, dict) else {}
+
+
+def _context_local_path(item: dict[str, Any]) -> str | None:
+    safety = _source_safety(item)
+    sanitized = safety.get("sanitized_local_path") or item.get("sanitized_local_path")
+    if sanitized:
+        return str(sanitized)
+    return item.get("local_path")
+
+
 def _section_heading(line: str) -> str | None:
     clean = line.strip()
     if not clean:
@@ -334,7 +347,21 @@ def build_retrieval_index(
             continue
         if item.get("ok") is not True or item.get("skipped") is True:
             continue
-        path = _resolve_local_path(run_dir, item.get("local_path"))
+        safety = _source_safety(item)
+        if safety.get("agent_context_allowed") is False:
+            warnings.append(
+                "Source safety excluded "
+                f"{item.get('url') or item.get('source_id') or 'unknown source'} "
+                "from retrieval context."
+            )
+            continue
+        if safety.get("risk_level") == "critical":
+            warnings.append(
+                "Critical-risk source was excluded from retrieval context: "
+                f"{item.get('url') or item.get('source_id') or 'unknown source'}."
+            )
+            continue
+        path = _resolve_local_path(run_dir, _context_local_path(item))
         if path is None or not path.exists() or path.is_dir():
             warnings.append(f"Source text unavailable for {item.get('url') or 'unknown source'}.")
             continue
@@ -378,11 +405,18 @@ def build_retrieval_index(
             source_role=_source_role(audit),
             freshness_status=_freshness_status(audit),
             fetched_at=item.get("fetched_at"),
-            warnings=audit_warnings.get(source_id, []),
+            warnings=[
+                *audit_warnings.get(source_id, []),
+                *list(safety.get("reasons") or [])[:3],
+            ],
             metadata={
                 "document_kind": item.get("document_kind"),
                 "content_type": item.get("content_type"),
                 "recommended_usage": audit.get("recommended_usage") if audit else None,
+                "source_safety": safety,
+                "raw_local_path": item.get("raw_local_path") or item.get("local_path"),
+                "sanitized_local_path": item.get("sanitized_local_path")
+                or safety.get("sanitized_local_path"),
             },
         )
         documents.append(doc)
