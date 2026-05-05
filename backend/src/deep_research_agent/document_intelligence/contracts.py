@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import ChunkIdentity, DocumentIdentity
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -110,7 +112,9 @@ class DocumentContentFeature(BaseModel):
 
 class DocumentChunk(BaseModel):
     chunk_id: str
+    chunk_identity: ChunkIdentity | None = None
     source_id: str
+    document_id: str | None = None
     section_id: str | None = None
     heading_path: list[str] = Field(default_factory=list)
     text: str
@@ -138,6 +142,8 @@ class DocumentNormalizationResult(BaseModel):
 
 
 class DocumentProfile(BaseModel):
+    document_id: str | None = None
+    document_identity: DocumentIdentity | None = None
     source_id: str
     url: str
     title: str | None = None

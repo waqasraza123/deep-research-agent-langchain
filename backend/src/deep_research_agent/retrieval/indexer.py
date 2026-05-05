@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from deep_research_agent.source_identity import source_domain, source_identity_from_dict
+from deep_research_agent.source_identity import (
+    ChunkIdentity,
+    document_identity_from_source,
+    source_domain,
+    source_identity_from_dict,
+    stable_chunk_id,
+)
 from deep_research_agent.source_intelligence.dedupe import content_hash
 
 from .contracts import RetrievalChunk, RetrievalDocument, RetrievalIndex
@@ -233,9 +239,26 @@ def _chunk_source_text(
             return
         digest = content_hash(chunk_text)
         ordinal = len(chunks) + 1
+        chunk_id = stable_chunk_id(
+            document_id=document.document_id,
+            source_id=document.source_id,
+            content_hash=digest,
+            start_offset=current_start,
+            end_offset=current_end,
+            ordinal=ordinal,
+        )
         chunks.append(
             RetrievalChunk(
-                chunk_id=f"{document.source_id}-C{ordinal:04d}",
+                chunk_id=chunk_id,
+                chunk_identity=ChunkIdentity(
+                    chunk_id=chunk_id,
+                    document_id=document.document_id,
+                    source_id=document.source_id,
+                    content_hash=digest,
+                    start_offset=current_start,
+                    end_offset=current_end,
+                    ordinal=ordinal,
+                ),
                 document_id=document.document_id,
                 source_id=document.source_id,
                 url=document.final_url or document.url,
@@ -326,6 +349,8 @@ def build_retrieval_index(
 
         identity = source_identity_from_dict({**item, "content_hash": item.get("content_hash")})
         source_id = identity.source_id
+        text_hash = content_hash(text)
+        document_identity = document_identity_from_source(item, content_hash=text_hash)
         audit = audits.get(source_id)
         url = str(item.get("url") or identity.url or "")
         final_url = item.get("final_url") or url
@@ -334,9 +359,9 @@ def build_retrieval_index(
             or source_domain(final_url)
             or urlsplit(final_url).hostname
         )
-        text_hash = content_hash(text)
         doc = RetrievalDocument(
-            document_id=source_id,
+            document_id=document_identity.document_id,
+            document_identity=document_identity,
             source_id=source_id,
             url=url,
             final_url=final_url,

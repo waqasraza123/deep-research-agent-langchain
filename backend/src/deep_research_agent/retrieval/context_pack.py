@@ -210,10 +210,18 @@ def build_all_context_packs(
     index: RetrievalIndex,
     queries: list[RetrievalQuery],
     results: list[RetrievalResult],
+    context_pack_max_chars: int | None = None,
 ) -> ContextPackBuildResult:
     packs = {
         pack_type: build_context_pack(
-            pack_type=pack_type, question=question, queries=queries, results=results, index=index
+            pack_type=pack_type,
+            question=question,
+            queries=queries,
+            results=results,
+            index=index,
+            max_chars=min(PACK_LIMITS[pack_type], context_pack_max_chars)
+            if context_pack_max_chars
+            else None,
         )
         for pack_type in PACK_LIMITS
     }

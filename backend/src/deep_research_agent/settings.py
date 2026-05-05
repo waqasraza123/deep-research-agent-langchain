@@ -74,6 +74,8 @@ class Settings:
     memory_enabled: bool = True
     source_reuse_enabled: bool = True
     source_audit_enabled: bool = True
+    protocol_selection_enabled: bool = True
+    intelligence_profile: str = "balanced_research"
     source_discovery_enabled: bool = False
     source_discovery_provider: str = "disabled"
     source_discovery_max_queries: int = 8
@@ -83,11 +85,21 @@ class Settings:
     source_discovery_allow_forums: bool = False
     source_discovery_require_primary: bool = True
     source_discovery_freshness_required: bool | None = None
+    max_discovery_queries: int = 8
+    max_selected_discovered_sources: int = 3
+    document_intelligence_enabled: bool = True
+    chunk_max_chars: int = 3200
+    chunk_overlap_chars: int = 300
+    retrieval_enabled: bool = True
+    embedding_provider: str = "disabled"
+    context_pack_max_chars: int = 11_000
     orchestration_enabled: bool = True
     synthesis_enabled: bool = True
     evaluation_enabled: bool = True
     verification_enabled: bool = True
     verification_gate_enabled: bool = False
+    max_verification_tasks: int = 12
+    confidence_threshold_for_review: float = 0.55
     benchmark_path: Path | None = None
     memory_stale_after_days: int = 30
     max_memory_results: int = 20
@@ -140,6 +152,22 @@ class Settings:
 
         max_page_chars = _clamp_int(_env_int("MAX_PAGE_CHARS", 15000), 2000, 50000)
         http_timeout_s = _env_float("HTTP_TIMEOUT_S", 20.0)
+        max_discovery_queries = _clamp_int(
+            _env_int(
+                "MAX_DISCOVERY_QUERIES",
+                _env_int("SOURCE_DISCOVERY_MAX_QUERIES", 8),
+            ),
+            0,
+            20,
+        )
+        max_selected_discovered_sources = _clamp_int(
+            _env_int(
+                "MAX_SELECTED_DISCOVERED_SOURCES",
+                _env_int("SOURCE_DISCOVERY_MAX_SELECTED_SOURCES", 3),
+            ),
+            0,
+            20,
+        )
         runs_dir = REPO_ROOT / "runs"
         memory_data_dir_raw = _env_str("MEMORY_DATA_DIR", "")
         benchmark_path_raw = _env_str("BENCHMARK_PATH", "")
@@ -178,18 +206,19 @@ class Settings:
             in ("1", "true", "yes"),
             source_audit_enabled=_env_str("SOURCE_AUDIT_ENABLED", "true").lower()
             in ("1", "true", "yes"),
+            protocol_selection_enabled=_env_str(
+                "PROTOCOL_SELECTION_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_profile=_env_str("INTELLIGENCE_PROFILE", "balanced_research"),
             source_discovery_enabled=_env_str("SOURCE_DISCOVERY_ENABLED", "false").lower()
             in ("1", "true", "yes"),
             source_discovery_provider=_env_str("SOURCE_DISCOVERY_PROVIDER", "disabled").lower(),
-            source_discovery_max_queries=_clamp_int(
-                _env_int("SOURCE_DISCOVERY_MAX_QUERIES", 8), 0, 20
-            ),
+            source_discovery_max_queries=max_discovery_queries,
             source_discovery_max_candidates_per_query=_clamp_int(
                 _env_int("SOURCE_DISCOVERY_MAX_CANDIDATES_PER_QUERY", 5), 0, 20
             ),
-            source_discovery_max_selected_sources=_clamp_int(
-                _env_int("SOURCE_DISCOVERY_MAX_SELECTED_SOURCES", 3), 0, 20
-            ),
+            source_discovery_max_selected_sources=max_selected_discovered_sources,
             source_discovery_allow_secondary_sources=_env_str(
                 "SOURCE_DISCOVERY_ALLOW_SECONDARY_SOURCES", "true"
             ).lower()
@@ -211,6 +240,20 @@ class Settings:
                 in ("0", "false", "no")
                 else None
             ),
+            max_discovery_queries=max_discovery_queries,
+            max_selected_discovered_sources=max_selected_discovered_sources,
+            document_intelligence_enabled=_env_str(
+                "DOCUMENT_INTELLIGENCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            chunk_max_chars=_clamp_int(_env_int("CHUNK_MAX_CHARS", 3200), 400, 20_000),
+            chunk_overlap_chars=_clamp_int(_env_int("CHUNK_OVERLAP_CHARS", 300), 0, 5000),
+            retrieval_enabled=_env_str("RETRIEVAL_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            embedding_provider=_env_str("EMBEDDING_PROVIDER", "disabled").lower(),
+            context_pack_max_chars=_clamp_int(
+                _env_int("CONTEXT_PACK_MAX_CHARS", 11000), 1000, 80_000
+            ),
             orchestration_enabled=_env_str("ORCHESTRATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             synthesis_enabled=_env_str("SYNTHESIS_ENABLED", "true").lower()
@@ -221,6 +264,12 @@ class Settings:
             in ("1", "true", "yes"),
             verification_gate_enabled=_env_str("VERIFICATION_GATE_ENABLED", "false").lower()
             in ("1", "true", "yes"),
+            max_verification_tasks=_clamp_int(
+                _env_int("MAX_VERIFICATION_TASKS", 12), 0, 100
+            ),
+            confidence_threshold_for_review=_env_float(
+                "CONFIDENCE_THRESHOLD_FOR_REVIEW", 0.55
+            ),
             benchmark_path=Path(benchmark_path_raw)
             if benchmark_path_raw
             else REPO_ROOT / "benchmarks",

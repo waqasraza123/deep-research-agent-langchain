@@ -30,9 +30,17 @@ def rebuild_retrieval_artifacts(
     thread_id: str | None,
     question: str,
     config: HybridRankingConfig | None = None,
+    chunk_chars: int = 1600,
+    overlap_chars: int = 180,
+    context_pack_max_chars: int | None = None,
     write_artifacts: bool = True,
 ) -> ContextPackBuildResult:
-    index = build_retrieval_index(run_dir, thread_id=thread_id)
+    index = build_retrieval_index(
+        run_dir,
+        thread_id=thread_id,
+        chunk_chars=chunk_chars,
+        overlap_chars=overlap_chars,
+    )
     queries = plan_retrieval_queries(question)
     results = rank_all_queries(index, queries, config=config or HybridRankingConfig())
     build_result = build_all_context_packs(
@@ -41,6 +49,7 @@ def rebuild_retrieval_artifacts(
         index=index,
         queries=queries,
         results=results,
+        context_pack_max_chars=context_pack_max_chars,
     )
     if write_artifacts:
         write_retrieval_artifacts(run_dir, build_result)

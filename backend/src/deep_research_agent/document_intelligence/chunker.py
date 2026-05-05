@@ -4,6 +4,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from deep_research_agent.source_identity import ChunkIdentity, stable_chunk_id
+
 from .contracts import DocumentChunk, DocumentSection, DocumentTable
 from .normalizer import content_hash
 
@@ -95,6 +97,7 @@ def chunk_document(
     sections: list[DocumentSection],
     tables: list[DocumentTable],
     config: ChunkingConfig | None = None,
+    document_id: str | None = None,
 ) -> list[DocumentChunk]:
     cfg = config or ChunkingConfig()
     table_ranges = [(table.start_offset, table.end_offset) for table in tables]
@@ -127,6 +130,16 @@ def chunk_document(
             chunk_text = text[start:end].strip()
             if chunk_text:
                 ordinal += 1
+                chunk_digest = content_hash(chunk_text)
+                resolved_document_id = document_id or source_id
+                stable_id = stable_chunk_id(
+                    document_id=resolved_document_id,
+                    source_id=source_id,
+                    content_hash=chunk_digest,
+                    start_offset=start,
+                    end_offset=end,
+                    ordinal=ordinal,
+                )
                 related_tables = [
                     table.table_id
                     for table in tables
@@ -134,14 +147,24 @@ def chunk_document(
                 ]
                 chunks.append(
                     DocumentChunk(
-                        chunk_id=_chunk_id(source_id, section.section_id, start, chunk_text),
+                        chunk_id=stable_id,
+                        chunk_identity=ChunkIdentity(
+                            chunk_id=stable_id,
+                            document_id=resolved_document_id,
+                            source_id=source_id,
+                            content_hash=chunk_digest,
+                            start_offset=start,
+                            end_offset=end,
+                            ordinal=ordinal,
+                        ),
                         source_id=source_id,
+                        document_id=resolved_document_id,
                         section_id=section.section_id,
                         heading_path=section.path,
                         text=chunk_text,
                         start_offset=start,
                         end_offset=end,
-                        content_hash=content_hash(chunk_text),
+                        content_hash=chunk_digest,
                         ordinal=ordinal,
                         approx_tokens=_approx_tokens(chunk_text),
                         context_before=text[

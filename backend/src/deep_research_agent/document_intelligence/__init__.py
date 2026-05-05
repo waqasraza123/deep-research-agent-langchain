@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from deep_research_agent.source_identity import document_identity_from_source
+
 from .artifact_writer import (
     DOCUMENT_INTELLIGENCE_ARTIFACTS,
     write_document_intelligence_artifacts,
@@ -129,6 +131,10 @@ def profile_document(
         source_type=resolved_type,
     )
     normalized_text = normalization.normalized_text
+    document_identity = document_identity_from_source(
+        source,
+        content_hash=normalization.content_hash,
+    )
     metadata = metadata_from_source(source, raw_text=raw_text, normalized_text=normalized_text)
     sections = section_document(
         normalized_text,
@@ -151,6 +157,7 @@ def profile_document(
         sections=sections,
         tables=tables,
         config=chunking,
+        document_id=document_identity.document_id,
     )
     warnings = list(normalization.warnings)
     if len(normalized_text) < 80:
@@ -162,6 +169,8 @@ def profile_document(
             )
         )
     profile = DocumentProfile(
+        document_id=document_identity.document_id,
+        document_identity=document_identity,
         source_id=resolved_source_id,
         url=resolved_url,
         title=resolved_title,

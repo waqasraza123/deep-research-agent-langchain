@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from deep_research_agent.source_identity import ChunkIdentity, DocumentIdentity
+
 RetrievalQueryType = Literal[
     "main",
     "subquestion",
@@ -24,6 +26,7 @@ ContextPackType = Literal[
 
 class RetrievalDocument(BaseModel):
     document_id: str
+    document_identity: DocumentIdentity | None = None
     source_id: str
     url: str
     final_url: str | None = None
@@ -46,6 +49,7 @@ class RetrievalDocument(BaseModel):
 
 class RetrievalChunk(BaseModel):
     chunk_id: str
+    chunk_identity: ChunkIdentity | None = None
     source_id: str
     url: str
     title: str | None = None

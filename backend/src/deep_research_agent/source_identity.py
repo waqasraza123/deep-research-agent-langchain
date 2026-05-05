@@ -24,6 +24,26 @@ class SourceIdentity(BaseModel):
     fetched_at: str | None = None
 
 
+class DocumentIdentity(BaseModel):
+    document_id: str
+    source_id: str
+    url: str = ""
+    title: str | None = None
+    domain: str | None = None
+    content_hash: str | None = None
+    local_path: str | None = None
+
+
+class ChunkIdentity(BaseModel):
+    chunk_id: str
+    document_id: str
+    source_id: str
+    content_hash: str
+    start_offset: int = 0
+    end_offset: int = 0
+    ordinal: int = 0
+
+
 def stable_source_id(
     *,
     url: str,
@@ -34,6 +54,31 @@ def stable_source_id(
     key = content_hash or canonical_url or normalized_url or url
     digest = hashlib.sha1((key or "unknown-source").encode("utf-8")).hexdigest()[:10]
     return f"S-{digest}"
+
+
+def stable_document_id(
+    *,
+    source_id: str,
+    content_hash: str | None = None,
+    url: str | None = None,
+) -> str:
+    key = content_hash or url or source_id or "unknown-document"
+    digest = hashlib.sha1(f"{source_id}|{key}".encode("utf-8")).hexdigest()[:12]
+    return f"D-{digest}"
+
+
+def stable_chunk_id(
+    *,
+    document_id: str,
+    source_id: str,
+    content_hash: str,
+    start_offset: int,
+    end_offset: int,
+    ordinal: int,
+) -> str:
+    key = f"{document_id}|{source_id}|{content_hash}|{start_offset}|{end_offset}|{ordinal}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:14]
+    return f"C-{digest}"
 
 
 def source_domain(url: str | None) -> str | None:
@@ -102,6 +147,40 @@ def source_identity_from_dict(source: dict[str, Any]) -> SourceIdentity:
 
 
 def source_identity_to_dict(identity: SourceIdentity) -> dict[str, Any]:
+    if hasattr(identity, "model_dump"):
+        return identity.model_dump(mode="json")
+    return identity.dict()
+
+
+def document_identity_from_source(
+    source: dict[str, Any],
+    *,
+    content_hash: str | None = None,
+) -> DocumentIdentity:
+    source_identity = source_identity_from_dict(source)
+    digest = content_hash or source_identity.content_hash
+    return DocumentIdentity(
+        document_id=stable_document_id(
+            source_id=source_identity.source_id,
+            content_hash=digest,
+            url=source_identity.url,
+        ),
+        source_id=source_identity.source_id,
+        url=source_identity.url,
+        title=source_identity.title,
+        domain=source_identity.domain,
+        content_hash=digest,
+        local_path=source.get("local_path"),
+    )
+
+
+def chunk_identity_to_dict(identity: ChunkIdentity) -> dict[str, Any]:
+    if hasattr(identity, "model_dump"):
+        return identity.model_dump(mode="json")
+    return identity.dict()
+
+
+def document_identity_to_dict(identity: DocumentIdentity) -> dict[str, Any]:
     if hasattr(identity, "model_dump"):
         return identity.model_dump(mode="json")
     return identity.dict()

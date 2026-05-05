@@ -22,6 +22,7 @@ from .artifacts import (
     write_strategy_artifacts,
 )
 from .document_intelligence import (
+    ChunkingConfig,
     build_document_context_block,
     build_document_intelligence_batch,
     profile_document,
@@ -36,6 +37,10 @@ from .evaluation.contracts import model_to_plain as evaluation_model_to_plain
 from .evaluation.regression_runner import run_regression_suite
 from .evidence import rebuild_evidence_artifacts
 from .intelligence import ResearchStrategy, create_research_strategy
+from .intelligence_pipeline_summary import (
+    build_intelligence_pipeline_summary,
+    write_intelligence_pipeline_summary,
+)
 from .intelligence_summary import rebuild_intelligence_summary_artifacts
 from .logging_config import configure_logging
 from .memory import (
@@ -291,9 +296,9 @@ def _source_discovery_settings(
     return SourceDiscoverySettings(
         discovery_enabled=settings.source_discovery_enabled,
         provider=provider,  # type: ignore[arg-type]
-        max_queries=settings.source_discovery_max_queries,
+        max_queries=settings.max_discovery_queries,
         max_candidates_per_query=settings.source_discovery_max_candidates_per_query,
-        max_selected_sources=settings.source_discovery_max_selected_sources,
+        max_selected_sources=settings.max_selected_discovered_sources,
         require_primary_source_when_possible=settings.source_discovery_require_primary,
         allow_secondary_sources=settings.source_discovery_allow_secondary_sources,
         allow_forums=settings.source_discovery_allow_forums,
@@ -878,6 +883,7 @@ def _try_rebuild_verification(
             td,
             thread_id=thread_id,
             config=VerificationConfig(
+                max_verification_tasks=settings.max_verification_tasks,
                 verification_gate_enabled=settings.verification_gate_enabled,
             ),
         )
@@ -902,6 +908,15 @@ def _try_rebuild_verification(
     gate_required = (
         settings.verification_gate_enabled and batch.summary.high_priority_open_issues > 0
     )
+    if (
+        settings.verification_gate_enabled
+        and batch.summary.confidence_after < settings.confidence_threshold_for_review
+    ):
+        gate_required = True
+        warnings.append(
+            "Verification gate requires review because calibrated confidence is below "
+            f"{settings.confidence_threshold_for_review:.2f}."
+        )
     if gate_required:
         warnings.append(
             "Verification gate requires review because high-priority unsupported, "
@@ -932,6 +947,26 @@ def _try_rebuild_intelligence_summary(
             run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
 
 
+def _write_pipeline_summary(
+    *,
+    settings: Settings,
+    td,
+    thread_id: str,
+    question: str,
+    run_context: RunContext | None = None,
+) -> None:
+    summary = build_intelligence_pipeline_summary(
+        td,
+        thread_id=thread_id,
+        question=question,
+        confidence_threshold_for_review=settings.confidence_threshold_for_review,
+    )
+    for rel_path in write_intelligence_pipeline_summary(td, summary):
+        if run_context:
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+
+
 def _write_audit_for_sources(
     *,
     thread_dir,
@@ -956,14 +991,25 @@ def _write_audit_for_sources(
 
 def _try_rebuild_retrieval(
     *,
+    settings: Settings,
     td,
     thread_id: str,
     question: str,
     warnings: list[str],
     run_context: RunContext | None = None,
 ):
+    if not settings.retrieval_enabled:
+        warnings.append("Retrieval artifacts were skipped because retrieval is disabled.")
+        return None
     try:
-        result = rebuild_retrieval_artifacts(td, thread_id=thread_id, question=question)
+        result = rebuild_retrieval_artifacts(
+            td,
+            thread_id=thread_id,
+            question=question,
+            chunk_chars=settings.chunk_max_chars,
+            overlap_chars=settings.chunk_overlap_chars,
+            context_pack_max_chars=settings.context_pack_max_chars,
+        )
     except Exception as e:
         log.exception("retrieval rebuild failed")
         warnings.append(f"Retrieval artifacts were not generated: {type(e).__name__}: {e}")
@@ -986,16 +1032,23 @@ def _try_rebuild_retrieval(
 
 def _write_document_intelligence_for_sources(
     *,
+    settings: Settings,
     thread_dir,
     thread_id: str,
     sources: list[SourceRecord] | list[dict[str, Any]],
     run_context: RunContext | None = None,
 ):
+    if not settings.document_intelligence_enabled:
+        return None
     source_dicts = [s.to_dict() if hasattr(s, "to_dict") else s for s in sources]
     batch = build_document_intelligence_batch(
         thread_dir=thread_dir,
         sources=source_dicts,
         thread_id=thread_id,
+        chunking=ChunkingConfig(
+            max_chars=settings.chunk_max_chars,
+            overlap_chars=settings.chunk_overlap_chars,
+        ),
     )
     for rel_path in write_document_intelligence_artifacts(thread_dir, batch):
         if run_context:
@@ -1040,8 +1093,10 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             selection = select_protocol(
                 question=req.question.strip(),
                 urls=req.urls,
-                requested_protocol_id=req.protocol_id,
-                requested_profile_id=req.intelligence_profile_id,
+                requested_protocol_id=req.protocol_id
+                if settings.protocol_selection_enabled
+                else "general_research",
+                requested_profile_id=req.intelligence_profile_id or settings.intelligence_profile,
                 mock_mode=req.mock_mode,
                 registry=protocol_registry,
             )
@@ -1091,8 +1146,11 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             protocol_selection = select_protocol(
                 question=req.question.strip(),
                 urls=requested_urls,
-                requested_protocol_id=req.protocol_id,
-                requested_profile_id=req.intelligence_profile_id,
+                requested_protocol_id=req.protocol_id
+                if effective_settings.protocol_selection_enabled
+                else "general_research",
+                requested_profile_id=req.intelligence_profile_id
+                or effective_settings.intelligence_profile,
                 mock_mode=effective_settings.model_provider == "mock",
             )
         except ProtocolError as e:
@@ -1304,7 +1362,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     sources=mock_crawl_result.sources,
                     run_context=run_context,
                 )
+                _write_document_intelligence_for_sources(
+                    settings=effective_settings,
+                    thread_dir=td,
+                    thread_id=thread_id,
+                    sources=mock_crawl_result.sources,
+                    run_context=run_context,
+                )
                 _try_rebuild_retrieval(
+                    settings=effective_settings,
                     td=td,
                     thread_id=thread_id,
                     question=req.question.strip(),
@@ -1417,6 +1483,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     warnings=warnings,
                     run_context=run_context,
                 )
+                _write_pipeline_summary(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    run_context=run_context,
+                )
                 run_context.budget_warning()
                 run_context.log("run_completed", message="mock run completed", metadata=metadata)
                 run_repository.set_warnings(thread_id, warnings)
@@ -1434,6 +1507,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     td=td,
                     thread_id=thread_id,
                     warnings=warnings,
+                    run_context=run_context,
+                )
+                _write_pipeline_summary(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
                     run_context=run_context,
                 )
                 run_repository.refresh_artifacts(thread_id)
@@ -1466,6 +1546,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             write_sources_manifest(td / "sources.json", crawl_result.sources)
             sources_meta = crawl_result.to_sources_json()
             document_batch = _write_document_intelligence_for_sources(
+                settings=effective_settings,
                 thread_dir=td,
                 thread_id=thread_id,
                 sources=crawl_result.sources,
@@ -1479,6 +1560,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 run_context=run_context,
             )
             retrieval_build_result = _try_rebuild_retrieval(
+                settings=effective_settings,
                 td=td,
                 thread_id=thread_id,
                 question=req.question.strip(),
@@ -1530,7 +1612,9 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 user_msg += (
                     "\n\nSource audit context:\n" + source_audit_batch.summary.instruction_block
                 )
-            document_context = build_document_context_block(document_batch)
+            document_context = (
+                build_document_context_block(document_batch) if document_batch else ""
+            )
             if document_context:
                 user_msg += "\n\n" + document_context
             if retrieval_build_result is not None:
@@ -1680,6 +1764,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     warnings=fallback_warnings,
                     run_context=run_context,
                 )
+                _write_pipeline_summary(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    run_context=run_context,
+                )
                 run_repository.set_warnings(thread_id, fallback_warnings)
                 run_repository.refresh_artifacts(thread_id)
                 run_repository.set_output_summary(
@@ -1695,6 +1786,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     td=td,
                     thread_id=thread_id,
                     warnings=fallback_warnings,
+                    run_context=run_context,
+                )
+                _write_pipeline_summary(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
                     run_context=run_context,
                 )
                 run_repository.refresh_artifacts(thread_id)
@@ -1773,6 +1871,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             warnings=warnings,
             run_context=run_context,
         )
+        _write_pipeline_summary(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
+            run_context=run_context,
+        )
         for artifact in list_artifacts(settings.runs_dir, thread_id):
             run_context.artifact_written(artifact.path, artifact.size_bytes)
         run_context.budget_warning()
@@ -1791,6 +1896,13 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             td=td,
             thread_id=thread_id,
             warnings=warnings,
+            run_context=run_context,
+        )
+        _write_pipeline_summary(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
             run_context=run_context,
         )
         run_repository.refresh_artifacts(thread_id)
@@ -1844,6 +1956,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 td,
                 thread_id=thread_id,
                 config=VerificationConfig(
+                    max_verification_tasks=settings.max_verification_tasks,
                     verification_gate_enabled=settings.verification_gate_enabled,
                 ),
             )
@@ -1900,7 +2013,12 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             index_path = td / "retrieval_index.json"
             if not index_path.exists() and not req.rebuild_if_missing:
                 raise HTTPException(status_code=404, detail="Retrieval index not found")
-            index = build_retrieval_index(td, thread_id=req.thread_id)
+            index = build_retrieval_index(
+                td,
+                thread_id=req.thread_id,
+                chunk_chars=settings.chunk_max_chars,
+                overlap_chars=settings.chunk_overlap_chars,
+            )
             query = plan_retrieval_queries(req.query, max_queries=1)[0]
             results = rank_retrieval_results(
                 index,
@@ -1925,7 +2043,20 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         try:
             run = run_repository.get(thread_id)
             td = ensure_thread_dir(settings.runs_dir, thread_id)
-            result = rebuild_retrieval_artifacts(td, thread_id=thread_id, question=run.question)
+            result = rebuild_retrieval_artifacts(
+                td,
+                thread_id=thread_id,
+                question=run.question,
+                chunk_chars=settings.chunk_max_chars,
+                overlap_chars=settings.chunk_overlap_chars,
+                context_pack_max_chars=settings.context_pack_max_chars,
+            )
+            _write_pipeline_summary(
+                settings=settings,
+                td=td,
+                thread_id=thread_id,
+                question=run.question,
+            )
             run_repository.refresh_artifacts(thread_id)
         except RunNotFoundError:
             raise HTTPException(status_code=404, detail="Run not found") from None
@@ -2120,6 +2251,31 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Intelligence summary not found")
         return json.loads(path.read_text(encoding="utf-8"))
 
+    @app.get("/runs/{thread_id}/intelligence-pipeline-summary")
+    def intelligence_pipeline_summary_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+            path = artifact_abs_path(
+                settings.runs_dir,
+                thread_id,
+                "intelligence_pipeline_summary.json",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        run = run_repository.get_or_none(thread_id)
+        summary = build_intelligence_pipeline_summary(
+            td,
+            thread_id=thread_id,
+            question=run.question if run else "",
+            confidence_threshold_for_review=settings.confidence_threshold_for_review,
+        )
+        write_intelligence_pipeline_summary(td, summary)
+        if run is not None:
+            run_repository.refresh_artifacts(thread_id)
+        return summary.model_dump(mode="json") if hasattr(summary, "model_dump") else summary.dict()
+
     @app.get("/runs/{thread_id}/quality-score")
     def quality_score_get(thread_id: str) -> dict[str, Any]:
         try:
@@ -2301,6 +2457,10 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 url=req.url,
                 title=req.title,
                 source_type=req.source_type,
+                chunking=ChunkingConfig(
+                    max_chars=settings.chunk_max_chars,
+                    overlap_chars=settings.chunk_overlap_chars,
+                ),
             )
         except Exception as e:
             log.exception("document profile failed")
