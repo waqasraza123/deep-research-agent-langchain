@@ -50,6 +50,9 @@ traceable artifacts under `runs/<thread_id>/`.
   controls in global JSON/Markdown artifacts. See `docs/handoff-registry.md`.
 - Handoff release manifests that turn registry-ready runs into auditable release batches for
   external or internal transfer. See `docs/handoff-release.md`.
+- Handoff release verification reports that re-check registry snapshot hashes, export archive
+  hashes, release artifacts, and global operator audit before transfer. See
+  `docs/handoff-release-verification.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -222,6 +225,9 @@ Most-used endpoints:
 - `GET /runs/handoff-releases`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
+- `POST /runs/handoff-releases/{release_id}/verification`
+- `GET /runs/handoff-releases/{release_id}/verification`
+- `GET /runs/handoff-releases/{release_id}/verification/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -438,6 +444,18 @@ curl http://localhost:8000/runs/handoff-releases \
 The release writes `runs/_handoff/releases/<release_id>/handoff_release.json` / `.md` and records
 which registry snapshot, run packages, export hashes, and required controls were used for the
 release decision.
+
+Verify a release before transfer:
+
+```bash
+curl http://localhost:8000/runs/handoff-releases/<release_id>/verification \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The verification writes `handoff_release_verification.json` / `.md` beside the release manifest and
+checks registry snapshot hash drift, release artifacts, selected export hashes, and the global audit
+chain.
 
 ## Agentic Research Control Plane
 

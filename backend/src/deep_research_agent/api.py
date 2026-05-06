@@ -200,6 +200,12 @@ from .runs.handoff_release import (
     read_handoff_release_manifest,
     render_handoff_release_markdown,
 )
+from .runs.handoff_release_verification import (
+    HandoffReleaseVerificationRequest,
+    build_handoff_release_verification_report,
+    read_handoff_release_verification_report,
+    render_handoff_release_verification_markdown,
+)
 from .runs.handoff_registry import (
     HandoffRegistryRequest,
     build_handoff_registry,
@@ -4940,11 +4946,78 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:
         try:
-            return _model_dump_jsonable(read_handoff_release_manifest(settings.runs_dir, release_id))
+            return _model_dump_jsonable(
+                read_handoff_release_manifest(settings.runs_dir, release_id)
+            )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Handoff release not found") from None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/runs/handoff-releases/{release_id}/verification")
+    def handoff_release_verify(
+        release_id: str,
+        req: HandoffReleaseVerificationRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseVerificationRequest()
+        try:
+            report = build_handoff_release_verification_report(
+                runs_dir=settings.runs_dir,
+                release_id=release_id,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff release not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release verification failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_verified",
+            actor=report.requested_by,
+            summary="Repository handoff release verification report was generated.",
+            artifacts=report.artifacts,
+            metadata={
+                "release_id": report.release_id,
+                "readiness": report.readiness,
+                "failure_count": len(report.failures),
+                "warning_count": len(report.warnings),
+                "release_sha256": report.release_sha256,
+                "required_controls": report.required_controls,
+            },
+        )
+        return {
+            "verification": _model_dump_jsonable(report),
+            "markdown_url": f"/runs/handoff-releases/{release_id}/verification/markdown",
+        }
+
+    @app.get("/runs/handoff-releases/{release_id}/verification")
+    def handoff_release_verification_get(release_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_verification_report(settings.runs_dir, release_id)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-releases/{release_id}/verification/markdown")
+    def handoff_release_verification_markdown(release_id: str):
+        try:
+            report = read_handoff_release_verification_report(settings.runs_dir, release_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_verification_markdown(report))
 
     @app.get("/runs/handoff-releases/{release_id}/markdown")
     def handoff_release_markdown(release_id: str):

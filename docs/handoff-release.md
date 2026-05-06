@@ -108,3 +108,7 @@ The release manifest is a release decision record, not the portable data package
 still receive the per-run export bundles, and operators can use the release manifest to prove which
 run packages were selected, what registry snapshot was used, and which readiness controls were
 enforced.
+
+Before transfer, generate the verification report documented in
+`docs/handoff-release-verification.md` to re-check the release artifacts, registry snapshot hash,
+selected export archive hashes, and global operator audit chain.
