@@ -177,6 +177,25 @@ class Settings:
     runtime_run_postprocessing: bool = True
     runtime_mock_agent_execution_enabled: bool = False
 
+    agent_control_enabled: bool = True
+    agent_control_strict_role_isolation: bool = True
+    agent_control_source_context_quarantine_enabled: bool = True
+    agent_control_tool_governance_enabled: bool = True
+    agent_control_filesystem_governance_enabled: bool = True
+    agent_control_skill_selection_enabled: bool = True
+    agent_control_subagent_planning_enabled: bool = True
+    agent_control_trace_analysis_enabled: bool = True
+    agent_control_artifact_validation_enabled: bool = True
+    agent_control_max_compiled_instruction_chars: int = 12_000
+    agent_control_max_subagents: int = 8
+    agent_control_max_handoffs: int = 32
+    agent_control_max_context_chars_per_role: int = 16_000
+    agent_control_fail_on_policy_violation: bool = False
+    agent_control_fail_on_missing_required_artifact: bool = False
+    agent_control_allow_mock_subagents: bool = True
+    agent_control_produce_markdown_artifacts: bool = True
+    agent_control_produce_json_artifacts: bool = True
+
     def default_budget(self):
         from .runtime.contracts import RunBudget
 
@@ -482,6 +501,76 @@ class Settings:
             in ("1", "true", "yes"),
             runtime_mock_agent_execution_enabled=_env_str(
                 "RUNTIME_MOCK_AGENT_EXECUTION_ENABLED", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_enabled=_env_str("AGENT_CONTROL_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            agent_control_strict_role_isolation=_env_str(
+                "AGENT_CONTROL_STRICT_ROLE_ISOLATION", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_source_context_quarantine_enabled=_env_str(
+                "AGENT_CONTROL_SOURCE_CONTEXT_QUARANTINE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_tool_governance_enabled=_env_str(
+                "AGENT_CONTROL_TOOL_GOVERNANCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_filesystem_governance_enabled=_env_str(
+                "AGENT_CONTROL_FILESYSTEM_GOVERNANCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_skill_selection_enabled=_env_str(
+                "AGENT_CONTROL_SKILL_SELECTION_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_subagent_planning_enabled=_env_str(
+                "AGENT_CONTROL_SUBAGENT_PLANNING_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_trace_analysis_enabled=_env_str(
+                "AGENT_CONTROL_TRACE_ANALYSIS_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_artifact_validation_enabled=_env_str(
+                "AGENT_CONTROL_ARTIFACT_VALIDATION_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_max_compiled_instruction_chars=_clamp_int(
+                _env_int("AGENT_CONTROL_MAX_COMPILED_INSTRUCTION_CHARS", 12000),
+                1000,
+                100_000,
+            ),
+            agent_control_max_subagents=_clamp_int(
+                _env_int("AGENT_CONTROL_MAX_SUBAGENTS", 8), 0, 32
+            ),
+            agent_control_max_handoffs=_clamp_int(
+                _env_int("AGENT_CONTROL_MAX_HANDOFFS", 32), 0, 200
+            ),
+            agent_control_max_context_chars_per_role=_clamp_int(
+                _env_int("AGENT_CONTROL_MAX_CONTEXT_CHARS_PER_ROLE", 16000),
+                1000,
+                200_000,
+            ),
+            agent_control_fail_on_policy_violation=_env_str(
+                "AGENT_CONTROL_FAIL_ON_POLICY_VIOLATION", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_fail_on_missing_required_artifact=_env_str(
+                "AGENT_CONTROL_FAIL_ON_MISSING_REQUIRED_ARTIFACT", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_allow_mock_subagents=_env_str(
+                "AGENT_CONTROL_ALLOW_MOCK_SUBAGENTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_produce_markdown_artifacts=_env_str(
+                "AGENT_CONTROL_PRODUCE_MARKDOWN_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            agent_control_produce_json_artifacts=_env_str(
+                "AGENT_CONTROL_PRODUCE_JSON_ARTIFACTS", "true"
             ).lower()
             in ("1", "true", "yes"),
         )

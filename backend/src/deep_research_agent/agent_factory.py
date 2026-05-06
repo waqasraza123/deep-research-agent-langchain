@@ -11,6 +11,9 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from .agent_control.contracts import ResearchAgentRole
+from .agent_control.policy import PolicyEngine
+from .agent_control.tool_governance import governed_tool
 from .model import create_chat_model
 from .runtime.budgets import BudgetExceeded
 from .runtime.mock_model import MockResearchAgent
@@ -55,6 +58,7 @@ class AgentService:
         max_links_per_source: int = 0,
         follow_links: bool = False,
         run_context: RunContext | None = None,
+        agent_control_config: dict[str, Any] | None = None,
     ):
         max_sources = max(0, min(int(max_sources), 20))
         max_links_per_source = max(0, min(int(max_links_per_source), 10))
@@ -203,9 +207,32 @@ Rules:
 
 Output only after all files are written."""
 
+        tools = [fetch_and_store]
+        if agent_control_config and agent_control_config.get("enabled"):
+            compiled = str(agent_control_config.get("supervisor_instructions") or "").strip()
+            if compiled:
+                system_prompt = compiled + "\n\nRuntime deliverable requirement:\n" + system_prompt
+            if self.settings.agent_control_tool_governance_enabled:
+                policy_engine = PolicyEngine(
+                    thread_id=thread_id,
+                    strict_quarantine=self.settings.agent_control_source_context_quarantine_enabled,
+                )
+                policy_engine.build_policies_for_plan(
+                    [ResearchAgentRole.SUPERVISOR, ResearchAgentRole.SOURCE_READER]
+                )
+                tools = [
+                    governed_tool(
+                        func=fetch_and_store,
+                        role=ResearchAgentRole.SOURCE_READER,
+                        tool_name="fetch_and_store",
+                        tool_category="source_fetch",
+                        policy_engine=policy_engine,
+                    )
+                ]
+
         agent = create_deep_agent(
             model=create_chat_model(self.settings),
-            tools=[fetch_and_store],
+            tools=tools,
             system_prompt=system_prompt,
             backend=self._backend,
             checkpointer=self._checkpointer,

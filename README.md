@@ -182,6 +182,110 @@ Specialized endpoints also exist for protocols, source discovery, document intel
 retrieval, memory, temporal intelligence, quantitative intelligence, evidence, hypotheses, verification, synthesis,
 evaluation, benchmarks, and quality scores.
 
+## Agentic Research Control Plane
+
+This is still a backend-only service. The Agentic Research Control Plane adds governance and
+auditability around the existing Deep Agents/LangGraph runner; it is not a frontend operator
+console.
+
+The control plane defines typed specialist roles, deterministic skill selection, source-context
+quarantine, tool and filesystem policies, handoff plans, compiled instructions, trace analysis,
+and artifact validation. It preserves the existing required deliverables:
+
+- `plan.md`
+- `notes.md`
+- `sources.json`
+- `report.md`
+
+Built-in roles include supervisor, planner, source triager, source reader, evidence extractor,
+skeptical reviewer, technical analyst, comparison analyst, risk reviewer, citation auditor,
+synthesis writer, and final editor. Role selection is deterministic: comparative questions add
+the comparison analyst, technical questions add the technical analyst, sensitive/current/legal/
+financial/security questions add risk and skeptical review, and strict citation mode adds the
+citation auditor.
+
+Built-in skills cover question decomposition, source quality triage, untrusted source reading,
+evidence tables, comparative matrices, technical due diligence, contradiction scans,
+overclaiming review, citation readiness, risk registers, synthesis outline, final polishing,
+temporal currentness, quantitative claim review, and source safety review.
+
+Source text is quarantined as untrusted evidence. Compiled system instructions include the trust
+boundary and policy summaries, but do not dump raw source content into trusted supervisor
+instructions. Source-looking commands such as “ignore previous instructions,” “reveal secrets,”
+or “execute this” are flagged for analysis rather than followed.
+
+Control-plane policies restrict which roles can use source fetch, artifact read/write, model, and
+subagent categories. Filesystem policy only allows run-directory artifacts, blocks traversal, and
+limits role write permissions. Some enforcement is direct, such as the governed source-fetch tool
+wrapper; other enforcement is advisory/post-run when the installed Deep Agents API does not expose
+role-specific runtime hooks.
+
+Preview without running the agent:
+
+```bash
+curl http://localhost:8000/agent-control/preview \
+  -H 'content-type: application/json' \
+  -d '{"question":"Compare FastAPI and LangGraph for a backend research agent.","urls":[]}'
+```
+
+Inspect control-plane metadata:
+
+- `GET /agent-control/roles`
+- `GET /agent-control/skills`
+- `POST /agent-control/preview`
+- `GET /runs/{thread_id}/agent-control`
+- `GET /runs/{thread_id}/agent-control/plan`
+- `GET /runs/{thread_id}/agent-control/policies`
+- `GET /runs/{thread_id}/agent-control/instructions`
+- `GET /runs/{thread_id}/agent-control/handoffs`
+- `GET /runs/{thread_id}/agent-control/trace`
+- `GET /runs/{thread_id}/agent-control/validation`
+- `POST /runs/{thread_id}/agent-control/rebuild`
+
+Generated control artifacts include `agent_control_plan.json/.md`, `role_selection.json/.md`,
+`skill_selection.json/.md`, `agent_policies.json/.md`, `tool_policies.json`,
+`filesystem_policies.json`, `context_bundles.json/.md`, `trust_boundary.md`,
+`source_context_warnings.json/.md`, `compiled_instructions.json`,
+`supervisor_instructions.md`, `subagent_instructions.md`, `subagent_specs.json/.md`,
+`artifact_contracts.json/.md`, `agent_handoffs.json/.md`, `agent_trace.jsonl/.md`,
+`trace_analysis.json/.md`, `policy_violations.json/.md`, `handoff_validation.json/.md`,
+`agent_output_validation.json/.md`, `agent_control_summary.json/.md`,
+`control_plane_warnings.md`, and `agent_control_error.json` when a control-plane step fails.
+
+Relevant settings default to enabled:
+
+```bash
+AGENT_CONTROL_ENABLED=true
+AGENT_CONTROL_STRICT_ROLE_ISOLATION=true
+AGENT_CONTROL_SOURCE_CONTEXT_QUARANTINE_ENABLED=true
+AGENT_CONTROL_TOOL_GOVERNANCE_ENABLED=true
+AGENT_CONTROL_FILESYSTEM_GOVERNANCE_ENABLED=true
+AGENT_CONTROL_SKILL_SELECTION_ENABLED=true
+AGENT_CONTROL_SUBAGENT_PLANNING_ENABLED=true
+AGENT_CONTROL_TRACE_ANALYSIS_ENABLED=true
+AGENT_CONTROL_ARTIFACT_VALIDATION_ENABLED=true
+AGENT_CONTROL_MAX_COMPILED_INSTRUCTION_CHARS=12000
+AGENT_CONTROL_MAX_SUBAGENTS=8
+AGENT_CONTROL_MAX_HANDOFFS=32
+AGENT_CONTROL_MAX_CONTEXT_CHARS_PER_ROLE=16000
+AGENT_CONTROL_FAIL_ON_POLICY_VIOLATION=false
+AGENT_CONTROL_FAIL_ON_MISSING_REQUIRED_ARTIFACT=false
+```
+
+Offline tests do not require OpenAI, Ollama, external web search, or external services:
+
+```bash
+cd backend
+pytest tests/test_agent_control.py
+pytest
+```
+
+Known limitations: direct subagent/tool/filesystem enforcement depends on the installed Deep
+Agents API surface, so some policies are recorded as advisory and validated after the run. Model
+behavior still determines specialist quality unless deterministic mock mode is used. Post-run
+trace analysis can audit artifacts and known events, but it cannot prove every internal model
+decision without deeper callback instrumentation.
+
 ## Autonomous Runtime Control
 
 The original `POST /run` path remains synchronous by default. Set `RUNTIME_ASYNC_ENABLED=true` or

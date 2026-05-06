@@ -17,6 +17,21 @@ from .advanced_summary import (
     read_or_build_advanced_intelligence_summary,
     write_advanced_intelligence_summary,
 )
+from .agent_control import (
+    AgentControlPlane,
+    AgentControlPreviewRequest,
+    AgentControlSettings,
+)
+from .agent_control import (
+    list_roles as list_agent_control_roles,
+)
+from .agent_control import (
+    list_skills as list_agent_control_skills,
+)
+from .agent_control import (
+    model_to_plain as agent_control_model_to_plain,
+)
+from .agent_control.artifact_writer import read_json_artifact, write_json_artifact
 from .agent_factory import AgentService
 from .artifacts import (
     INTERNAL_FILES,
@@ -1483,6 +1498,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     memory_retriever = MemoryRetriever(memory_repository, memory_source_cache)
     orchestration_executor = OrchestrationExecutor(settings.runs_dir)
     protocol_registry = ProtocolRegistry()
+    agent_control_plane = AgentControlPlane(runs_dir=settings.runs_dir, runtime_settings=settings)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -1543,6 +1559,77 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except Exception:
             log.exception("provenance refresh failed for run %s", thread_id)
 
+    def _agent_control_settings(
+        overrides: dict[str, Any] | None = None,
+        explicit: AgentControlSettings | None = None,
+    ) -> AgentControlSettings:
+        if explicit is not None:
+            base = explicit
+        else:
+            base = AgentControlSettings.from_runtime(settings)
+        if overrides:
+            data = base.model_dump(mode="json")
+            data.update(overrides)
+            return AgentControlSettings(**data)
+        return base
+
+    def _read_control_json(thread_id: str, rel_path: str) -> Any:
+        try:
+            return read_json_artifact(settings.runs_dir, thread_id, rel_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"{rel_path} not found") from None
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Invalid {rel_path}: {e}") from e
+
+    def _write_agent_control_error(thread_id: str, error: Exception) -> None:
+        try:
+            write_json_artifact(
+                settings.runs_dir,
+                thread_id,
+                "agent_control_error.json",
+                {"error_type": type(error).__name__, "message": str(error)},
+            )
+        except Exception:
+            log.exception("failed writing agent_control_error.json")
+
+    def _finish_agent_control(
+        *,
+        thread_id: str,
+        td,
+        question: str,
+        urls: list[str],
+        control_plan,
+        control_settings: AgentControlSettings,
+        warnings: list[str],
+    ) -> None:
+        if not control_settings.enabled:
+            return
+        try:
+            if control_plan is None:
+                control_plan = agent_control_plane.build_control_plan(
+                    thread_id=thread_id,
+                    question=question,
+                    urls=urls,
+                    settings=control_settings,
+                    available_artifacts=[path.name for path in td.iterdir() if path.is_file()],
+                    persist=True,
+                )
+            summary = agent_control_plane.post_run_analyze(
+                thread_id=thread_id,
+                run_dir=td,
+                control_plan=control_plan,
+                settings=control_settings,
+            )
+            warnings.extend(summary.warnings)
+        except Exception as e:
+            log.exception("agent control post-run analysis failed")
+            _write_agent_control_error(thread_id, e)
+            warnings.append(f"Agent control analysis failed: {type(e).__name__}: {e}")
+            if control_settings.fail_on_policy_violation:
+                raise
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"ok": True}
@@ -1550,6 +1637,51 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.get("/models")
     def models() -> list[dict[str, Any]]:
         return [m.dict() for m in build_model_registry(settings)]
+
+    @app.get("/agent-control/roles")
+    def agent_control_roles() -> list[dict[str, Any]]:
+        return [agent_control_model_to_plain(role) for role in list_agent_control_roles()]
+
+    @app.get("/agent-control/skills")
+    def agent_control_skills() -> list[dict[str, Any]]:
+        return [agent_control_model_to_plain(skill) for skill in list_agent_control_skills()]
+
+    @app.post("/agent-control/preview")
+    def agent_control_preview(req: AgentControlPreviewRequest) -> dict[str, Any]:
+        thread_id = (
+            req.thread_id
+            or "preview-"
+            + hashlib.sha1((req.question + "|" + "|".join(req.urls)).encode("utf-8")).hexdigest()[
+                :12
+            ]
+        )
+        control_settings = _agent_control_settings(req.settings_overrides, req.settings)
+        plan = agent_control_plane.build_control_plan(
+            thread_id=thread_id,
+            question=req.question.strip(),
+            urls=[u.strip() for u in req.urls if u and u.strip()],
+            settings=control_settings,
+            persist=False,
+        )
+        return {
+            "thread_id": thread_id,
+            "selected_roles": [agent_control_model_to_plain(role) for role in plan.selected_roles],
+            "selected_skills": [
+                agent_control_model_to_plain(skill)
+                for skill in plan.selected_skills.selected_skills
+            ],
+            "planned_subagents": [agent_control_model_to_plain(spec) for spec in plan.subagents],
+            "policies": {
+                "tool_policies": [
+                    agent_control_model_to_plain(policy) for policy in plan.tool_policies
+                ],
+                "filesystem_policies": [
+                    agent_control_model_to_plain(policy) for policy in plan.filesystem_policies
+                ],
+            },
+            "warnings": plan.policy_warnings,
+            "expected_artifacts": plan.required_artifacts,
+        }
 
     @app.get("/protocols")
     def protocols() -> list[dict[str, Any]]:
@@ -1700,13 +1832,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     def runtime_pause(job_id: str, req: RuntimeJobControlRequest | None = None) -> dict[str, Any]:
         request = req or RuntimeJobControlRequest()
         try:
-            return PauseResumeService(
-                repository=runtime_repository, runs_dir=settings.runs_dir
-            ).request_pause(
-                job_id=job_id,
-                requested_by=request.requested_by,
-                reason=request.reason,
-            ).dict()
+            return (
+                PauseResumeService(repository=runtime_repository, runs_dir=settings.runs_dir)
+                .request_pause(
+                    job_id=job_id,
+                    requested_by=request.requested_by,
+                    reason=request.reason,
+                )
+                .dict()
+            )
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -1716,13 +1850,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=409, detail="Runtime resume is disabled")
         request = req or RuntimeJobControlRequest()
         try:
-            return PauseResumeService(
-                repository=runtime_repository, runs_dir=settings.runs_dir
-            ).request_resume(
-                job_id=job_id,
-                requested_by=request.requested_by,
-                reason=request.reason,
-            ).dict()
+            return (
+                PauseResumeService(repository=runtime_repository, runs_dir=settings.runs_dir)
+                .request_resume(
+                    job_id=job_id,
+                    requested_by=request.requested_by,
+                    reason=request.reason,
+                )
+                .dict()
+            )
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -1742,9 +1878,11 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.get("/runtime/jobs/{job_id}/recovery-plan")
     def runtime_job_recovery_plan(job_id: str) -> dict[str, Any]:
-        return ResumeInspector(
-            repository=runtime_repository, runs_dir=settings.runs_dir
-        ).inspect_job(job_id).dict()
+        return (
+            ResumeInspector(repository=runtime_repository, runs_dir=settings.runs_dir)
+            .inspect_job(job_id)
+            .dict()
+        )
 
     @app.post("/runtime/recover-stale")
     def runtime_recover_stale() -> dict[str, Any]:
@@ -1855,6 +1993,34 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         )
 
         requested_urls = [u.strip() for u in req.urls if u and u.strip()]
+        control_settings = AgentControlSettings.from_runtime(effective_settings)
+        control_plan = None
+        agent_control_config: dict[str, Any] | None = None
+        if control_settings.enabled:
+            try:
+                control_plan = agent_control_plane.build_control_plan(
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    urls=requested_urls,
+                    settings=control_settings,
+                    available_artifacts=[],
+                    persist=True,
+                )
+                agent_control_config = agent_control_plane.prepare_agent_configuration(
+                    control_plan, effective_settings
+                )
+                run_context.artifact_written("agent_control_plan.json", None)
+            except Exception as e:
+                log.exception("agent control pre-run planning failed")
+                _write_agent_control_error(thread_id, e)
+                if control_settings.fail_on_policy_violation:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": f"Agent control planning failed: {type(e).__name__}: {e}",
+                            "thread_id": thread_id,
+                        },
+                    ) from e
         try:
             protocol_selection = select_protocol(
                 question=req.question.strip(),
@@ -2258,6 +2424,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 )
                 run_context.budget_warning()
                 run_context.log("run_completed", message="mock run completed", metadata=metadata)
+                _finish_agent_control(
+                    thread_id=thread_id,
+                    td=td,
+                    question=req.question.strip(),
+                    urls=fetch_urls,
+                    control_plan=control_plan,
+                    control_settings=control_settings,
+                    warnings=warnings,
+                )
                 run_repository.set_warnings(thread_id, warnings)
                 _refresh_provenance_for_run(thread_id)
                 _try_write_advanced_summary(
@@ -2496,6 +2671,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                 max_links_per_source=max_links_per_source,
                 follow_links=follow_links,
                 run_context=run_context,
+                agent_control_config=agent_control_config,
             )
             model_name = (
                 effective_settings.ollama_model
@@ -2714,6 +2890,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     td,
                     "[MOCK OUTPUT] Explicit mock fallback completed after model failure.",
                 )
+                _finish_agent_control(
+                    thread_id=thread_id,
+                    td=td,
+                    question=req.question.strip(),
+                    urls=locals().get("fetch_urls", urls),
+                    control_plan=control_plan,
+                    control_settings=control_settings,
+                    warnings=fallback_warnings,
+                )
                 run_repository.set_output_summary(
                     thread_id,
                     summary=fallback_summary,
@@ -2846,6 +3031,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             run_context.artifact_written(artifact.path, artifact.size_bytes)
         run_context.budget_warning()
         run_context.log("run_completed", message="run completed")
+        _finish_agent_control(
+            thread_id=thread_id,
+            td=td,
+            question=req.question.strip(),
+            urls=locals().get("fetch_urls", urls),
+            control_plan=control_plan,
+            control_settings=control_settings,
+            warnings=warnings,
+        )
         run_repository.set_warnings(thread_id, warnings)
         _refresh_provenance_for_run(thread_id)
         run_repository.refresh_artifacts(thread_id)
@@ -4068,6 +4262,85 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=400, detail=str(e)) from e
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Stage outputs not found") from None
+
+    @app.get("/runs/{thread_id}/agent-control")
+    def run_agent_control(thread_id: str) -> dict[str, Any]:
+        try:
+            return _read_control_json(thread_id, "agent_control_summary.json")
+        except HTTPException as summary_error:
+            if summary_error.status_code != 404:
+                raise
+            return _read_control_json(thread_id, "agent_control_plan.json")
+
+    @app.get("/runs/{thread_id}/agent-control/plan")
+    def run_agent_control_plan(thread_id: str) -> dict[str, Any]:
+        return _read_control_json(thread_id, "agent_control_plan.json")
+
+    @app.get("/runs/{thread_id}/agent-control/policies")
+    def run_agent_control_policies(thread_id: str) -> dict[str, Any]:
+        return _read_control_json(thread_id, "agent_policies.json")
+
+    @app.get("/runs/{thread_id}/agent-control/instructions")
+    def run_agent_control_instructions(thread_id: str) -> Any:
+        return _read_control_json(thread_id, "compiled_instructions.json")
+
+    @app.get("/runs/{thread_id}/agent-control/handoffs")
+    def run_agent_control_handoffs(thread_id: str) -> Any:
+        return _read_control_json(thread_id, "agent_handoffs.json")
+
+    @app.get("/runs/{thread_id}/agent-control/trace")
+    def run_agent_control_trace(thread_id: str) -> dict[str, Any]:
+        try:
+            return _read_control_json(thread_id, "trace_analysis.json")
+        except HTTPException as trace_error:
+            if trace_error.status_code != 404:
+                raise
+            try:
+                td = ensure_thread_dir(settings.runs_dir, thread_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            path = td / "agent_trace.jsonl"
+            if not path.exists():
+                raise HTTPException(status_code=404, detail="agent trace not found") from None
+            return {
+                "thread_id": thread_id,
+                "events": [
+                    json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ],
+            }
+
+    @app.get("/runs/{thread_id}/agent-control/validation")
+    def run_agent_control_validation(thread_id: str) -> Any:
+        return _read_control_json(thread_id, "agent_output_validation.json")
+
+    @app.post("/runs/{thread_id}/agent-control/rebuild")
+    def run_agent_control_rebuild(thread_id: str) -> dict[str, Any]:
+        try:
+            ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        run = run_repository.get_or_none(thread_id)
+        question = run.question if run is not None else None
+        urls = run.urls if run is not None else None
+        try:
+            summary = agent_control_plane.rebuild_from_run(
+                thread_id=thread_id,
+                question=question,
+                urls=urls,
+                settings=AgentControlSettings.from_runtime(settings),
+            )
+        except Exception as e:
+            _write_agent_control_error(thread_id, e)
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        if run is not None:
+            run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "summary": agent_control_model_to_plain(summary),
+            "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
 
     @app.get("/runs/{thread_id}/artifacts")
     def run_artifacts(thread_id: str) -> list[dict[str, Any]]:
