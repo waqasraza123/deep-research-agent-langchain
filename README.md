@@ -28,6 +28,9 @@ traceable artifacts under `runs/<thread_id>/`.
   plans, and run-to-run artifact diffs. See `docs/provenance.md`.
 - Audit-ready run export bundles with selectable profiles, checksums, redacted text/JSON payloads,
   skip accounting, and zip downloads. See `docs/run-export.md`.
+- Deterministic human-review dossiers with blocker criteria, required actions, confidence,
+  verification, source-safety, provenance, replay, and export handoff status. See
+  `docs/review-dossier.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -167,6 +170,9 @@ Most-used endpoints:
 - `GET /runs/{thread_id}/budget`
 - `POST /runs/{thread_id}/cancel`
 - `GET /runs/{thread_id}/review`
+- `POST /runs/{thread_id}/review/dossier`
+- `GET /runs/{thread_id}/review/dossier`
+- `GET /runs/{thread_id}/review/dossier/markdown`
 - `POST /runs/{thread_id}/review/approve`
 - `POST /runs/{thread_id}/review/request-changes`
 - `POST /runs/{thread_id}/review/reject`
@@ -728,7 +734,7 @@ Depending on enabled features, runs can also include strategy, protocol, source 
 document profile, retrieval, context pack, memory, temporal profile, timeline, currentness,
 temporal claim, quantitative profile, numeric claim, table/CSV profile, quantitative comparison,
 source safety, sanitized source, evidence, hypothesis, verification, synthesis, evaluation,
-advanced intelligence summary, provenance, replay, quality, and review artifacts.
+advanced intelligence summary, provenance, replay, quality, review dossier, and review artifacts.
 Export bundles live under `runs/<thread_id>/exports/`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
@@ -737,6 +743,18 @@ Fetched source text and metadata live under
 
 Pass `"require_review": true` to `/run` to finish in `waiting_for_review`. Operators can approve,
 request changes, or reject through review endpoints.
+
+Before taking that action, generate a review dossier:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/review/dossier \
+  -H 'content-type: application/json' \
+  -d '{"reviewer":"operator", "require_export_bundle":true, "require_replay_evidence":false}'
+```
+
+The dossier writes `review_dossier.json` / `.md` and recommends approval, changes, or rejection
+from deterministic artifact criteria. It does not replace qualified review for legal, medical,
+financial, security, or other high-stakes uses.
 
 The backend is a research and traceability prototype, not professional advice. Legal, medical, and
 financial outputs are informational only and should be reviewed by qualified humans before use.

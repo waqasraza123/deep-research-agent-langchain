@@ -178,6 +178,12 @@ from .runs.repository import (
     settings_snapshot_from_object,
 )
 from .runs.review import approve_review, get_review, reject_review, request_changes
+from .runs.review_dossier import (
+    ReviewDossierRequest,
+    build_review_dossier,
+    read_review_dossier,
+    render_review_dossier_markdown,
+)
 from .runs.serializers import run_detail, run_summary
 from .runs.state_machine import InvalidRunTransitionError
 from .runtime.budgets import BudgetExceeded, read_budget_file
@@ -4630,6 +4636,54 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             return model_to_dict(get_review(run_repository, thread_id))
         except RunNotFoundError:
             raise HTTPException(status_code=404, detail="Run not found") from None
+
+    @app.post("/runs/{thread_id}/review/dossier")
+    def review_dossier_create(
+        thread_id: str,
+        req: ReviewDossierRequest | None = None,
+    ) -> dict[str, Any]:
+        try:
+            run = run_repository.get(thread_id)
+            dossier = build_review_dossier(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                run=run,
+                request=req or ReviewDossierRequest(),
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("review dossier generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        return {
+            "thread_id": thread_id,
+            "dossier": _model_dump_jsonable(dossier),
+            "markdown_url": f"/runs/{thread_id}/review/dossier/markdown",
+        }
+
+    @app.get("/runs/{thread_id}/review/dossier")
+    def review_dossier_get(thread_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_review_dossier(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Review dossier not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/review/dossier/markdown")
+    def review_dossier_markdown(thread_id: str):
+        try:
+            dossier = read_review_dossier(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Review dossier not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_review_dossier_markdown(dossier))
 
     @app.post("/runs/{thread_id}/review/approve")
     def review_approve(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
