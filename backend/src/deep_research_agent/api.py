@@ -163,6 +163,12 @@ from .retrieval import (
 )
 from .runs.cleanup import apply_cleanup_plan, build_cleanup_plan
 from .runs.contracts import ReviewState, RunCancellationRequest, RunStatus, model_to_dict
+from .runs.export_bundle import (
+    RunExportRequest,
+    build_run_export_bundle,
+    export_bundle_path,
+    read_export_manifest,
+)
 from .runs.lifecycle import RunLifecycle
 from .runs.repository import (
     RunCancelledError,
@@ -5120,6 +5126,53 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.get("/runs/{thread_id}/artifacts")
     def run_artifacts(thread_id: str) -> list[dict[str, Any]]:
         return [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)]
+
+    @app.post("/runs/{thread_id}/export")
+    def run_export_create(thread_id: str, req: RunExportRequest | None = None) -> dict[str, Any]:
+        try:
+            manifest = build_run_export_bundle(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=req or RunExportRequest(),
+            )
+            if run_repository.get_or_none(thread_id) is not None:
+                run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("run export failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        return {
+            "thread_id": thread_id,
+            "manifest": _model_dump_jsonable(manifest),
+            "download_url": f"/runs/{thread_id}/export/download",
+            "manifest_url": f"/runs/{thread_id}/export",
+        }
+
+    @app.get("/runs/{thread_id}/export")
+    def run_export_manifest(thread_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_export_manifest(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Export manifest not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/export/download")
+    def run_export_download(thread_id: str):
+        try:
+            path = export_bundle_path(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Export bundle not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"{thread_id}-run-export.zip",
+        )
 
     @app.get("/runs/{thread_id}/manifest")
     def run_manifest(thread_id: str) -> dict[str, Any]:

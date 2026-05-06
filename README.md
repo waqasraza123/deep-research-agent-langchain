@@ -26,6 +26,8 @@ traceable artifacts under `runs/<thread_id>/`.
   synthesis, verification, quality evaluation, and local SQLite memory.
 - Backend provenance artifacts for manifests, dependency DAGs, reproducibility reports, replay
   plans, and run-to-run artifact diffs. See `docs/provenance.md`.
+- Audit-ready run export bundles with selectable profiles, checksums, redacted text/JSON payloads,
+  skip accounting, and zip downloads. See `docs/run-export.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -156,6 +158,9 @@ Most-used endpoints:
 - `GET /runs/{thread_id}/reproducibility`
 - `GET /runs/{thread_id}/replay-plan`
 - `POST /runs/{thread_id}/replay`
+- `POST /runs/{thread_id}/export`
+- `GET /runs/{thread_id}/export`
+- `GET /runs/{thread_id}/export/download`
 - `GET /runs/{thread_id}/advanced-intelligence-summary`
 - `POST /runs/diff`
 - `GET /runs/{thread_id}/events`
@@ -294,6 +299,22 @@ Replay copies only seed artifacts needed for deterministic reconstruction, rewri
 layers, writes `replay_execution.json` / `.md`, refreshes provenance, and returns a manifest diff
 plus expected-hash matches and mismatches. It does not refetch live URLs or rerun model-dependent
 agent generation in offline mode, so report text and source payloads are treated as captured inputs.
+
+## Run Export Bundles
+
+Create an audit-ready zip for a run with:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/export \
+  -H 'content-type: application/json' \
+  -d '{"profile":"audit", "include_raw_sources":false, "redact":true}'
+```
+
+The export writer produces `exports/run_export.zip`, `exports/export_manifest.json`, and
+`exports/export_manifest.md`. The manifest records included artifacts, skipped artifacts, source and
+exported SHA-256 hashes, redaction status, byte limits, and the download endpoint. By default raw
+`sources/` and `sanitized_sources/` payloads are excluded; include them only when the export target
+is trusted to receive captured source text.
 
 ## Agentic Research Control Plane
 
@@ -708,6 +729,7 @@ document profile, retrieval, context pack, memory, temporal profile, timeline, c
 temporal claim, quantitative profile, numeric claim, table/CSV profile, quantitative comparison,
 source safety, sanitized source, evidence, hypothesis, verification, synthesis, evaluation,
 advanced intelligence summary, provenance, replay, quality, and review artifacts.
+Export bundles live under `runs/<thread_id>/exports/`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 
