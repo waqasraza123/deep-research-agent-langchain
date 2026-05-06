@@ -25,6 +25,8 @@ CONTROL_ARTIFACTS = {
     "operator_audit.md",
     "custody_certificate.json",
     "custody_certificate.md",
+    "disclosure_report.json",
+    "disclosure_report.md",
     INTEGRITY_REPORT_JSON,
     INTEGRITY_REPORT_MD,
 }

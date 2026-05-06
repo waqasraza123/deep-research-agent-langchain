@@ -26,6 +26,10 @@ DYNAMIC_ARTIFACTS = {
     CUSTODY_CERTIFICATE_MD,
     "operator_audit.jsonl",
     "operator_audit.md",
+    "integrity_report.json",
+    "integrity_report.md",
+    "disclosure_report.json",
+    "disclosure_report.md",
 }
 
 

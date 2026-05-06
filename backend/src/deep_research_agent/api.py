@@ -169,6 +169,12 @@ from .runs.custody import (
     read_run_custody_certificate,
     render_run_custody_certificate_markdown,
 )
+from .runs.disclosure import (
+    RunDisclosureRequest,
+    build_run_disclosure_report,
+    read_run_disclosure_report,
+    render_run_disclosure_report_markdown,
+)
 from .runs.export_bundle import (
     RunExportRequest,
     build_run_export_bundle,
@@ -5154,6 +5160,75 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_run_integrity_report_markdown(report))
+
+    @app.post("/runs/{thread_id}/disclosure")
+    def run_disclosure_create(
+        thread_id: str,
+        req: RunDisclosureRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or RunDisclosureRequest()
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            report = build_run_disclosure_report(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=request,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("disclosure report generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="disclosure.report_generated",
+            actor=report.requested_by,
+            summary="Run disclosure report was generated.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["disclosure_report.json", "disclosure_report.md"],
+            metadata={
+                "readiness": report.readiness,
+                "risk_level": report.risk_level,
+                "finding_count": len(report.findings),
+                "high_or_critical_count": report.high_or_critical_count,
+                "raw_source_count": report.artifact_summary.raw_source_count,
+                "skipped_large_count": report.artifact_summary.skipped_large_count,
+                "require_no_high_risk": request.require_no_high_risk,
+            },
+        )
+        run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "report": _model_dump_jsonable(report),
+            "markdown_url": f"/runs/{thread_id}/disclosure/markdown",
+        }
+
+    @app.get("/runs/{thread_id}/disclosure")
+    def run_disclosure_get(thread_id: str) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(read_run_disclosure_report(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Disclosure report not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/disclosure/markdown")
+    def run_disclosure_markdown(thread_id: str):
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            report = read_run_disclosure_report(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Disclosure report not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_run_disclosure_report_markdown(report))
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:

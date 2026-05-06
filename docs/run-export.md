@@ -63,8 +63,8 @@ curl -o run-export.zip http://localhost:8000/runs/<thread_id>/export/download
 
 `public` includes the user-facing report, core run metadata, provenance, reproducibility, replay,
 quality, evidence, verification, source-audit, source-safety, temporal, quantitative, hypothesis,
-synthesis, custody certificate, integrity report, and summary artifacts. It is meant for a compact
-operator handoff and excludes raw source payloads by default.
+synthesis, custody certificate, integrity report, disclosure report, and summary artifacts. It is
+meant for a compact operator handoff and excludes raw source payloads by default.
 
 `audit` includes all non-internal run artifacts except export artifacts and raw source payloads,
 unless `include_raw_sources=true`. This is the default because it captures the decision trail while

@@ -39,6 +39,7 @@ PUBLIC_INCLUDE_PATTERNS = (
     "replay_plan.*",
     "custody_certificate.*",
     "integrity_report.*",
+    "disclosure_report.*",
     "quality_score.*",
     "evaluation.*",
     "verification_report.*",

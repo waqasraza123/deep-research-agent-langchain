@@ -91,6 +91,10 @@ finding metadata in `integrity_report.json` before regenerating provenance, cust
 artifacts. Regeneration can be appropriate after intentional changes, but it should not be used to
 hide unexplained drift.
 
+Use `POST /runs/{thread_id}/disclosure` after integrity verification when the next step is external
+handoff. Integrity verifies file drift; disclosure focuses on likely secrets, raw source exposure,
+and redaction posture.
+
 The report is a local deterministic verification artifact. It does not replace centralized logging,
 immutable storage, external checksums, access controls, or qualified human review for high-stakes
 research outputs.

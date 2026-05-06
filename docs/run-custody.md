@@ -106,3 +106,6 @@ security, or other high-stakes conclusions.
 After custody generation, use `POST /runs/{thread_id}/integrity` when you need to check whether
 the current artifact directory still matches the provenance manifest, custody hash inventory, export
 archive manifest, and operator-audit chains.
+
+Before external disclosure, use `POST /runs/{thread_id}/disclosure` to scan for likely secrets,
+raw source exposure, raw-source export settings, and oversized text artifacts that were not scanned.

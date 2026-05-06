@@ -41,6 +41,9 @@ traceable artifacts under `runs/<thread_id>/`.
   handoff review. See `docs/run-custody.md`.
 - Run integrity reports that verify current artifacts against provenance manifests, custody
   inventories, export archive hashes, and operator-audit hash chains. See `docs/run-integrity.md`.
+- Run disclosure reports that scan artifacts and export manifests for raw source exposure, likely
+  secrets, oversized text artifacts, and redaction-risk handoff issues. See
+  `docs/run-disclosure.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -200,6 +203,9 @@ Most-used endpoints:
 - `POST /runs/{thread_id}/integrity`
 - `GET /runs/{thread_id}/integrity`
 - `GET /runs/{thread_id}/integrity/markdown`
+- `POST /runs/{thread_id}/disclosure`
+- `GET /runs/{thread_id}/disclosure`
+- `GET /runs/{thread_id}/disclosure/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -370,6 +376,18 @@ curl http://localhost:8000/runs/<thread_id>/integrity \
 The integrity report writes `integrity_report.json` / `.md` and compares current files against
 provenance, custody, export, and operator-audit controls without refetching sources or calling
 models.
+
+Scan disclosure risk before external handoff with:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/disclosure \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator","require_no_high_risk":true}'
+```
+
+The disclosure report writes `disclosure_report.json` / `.md` and flags likely secrets, raw source
+artifacts, export redaction settings, raw-source export inclusion, and oversized text artifacts that
+need manual review.
 
 ## Agentic Research Control Plane
 
@@ -788,6 +806,7 @@ Export bundles live under `runs/<thread_id>/exports/`.
 Retention policies write `retention_policy.json` / `.md` and are honored by cleanup planning.
 Custody certificates write `custody_certificate.json` / `.md` for final handoff readiness.
 Integrity reports write `integrity_report.json` / `.md` for artifact drift checks.
+Disclosure reports write `disclosure_report.json` / `.md` for external handoff risk review.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 
