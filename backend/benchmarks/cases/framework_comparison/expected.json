@@ -1,0 +1,12 @@
+{
+  "must_mention": ["LangGraph", "CrewAI", "tradeoffs"],
+  "must_not_mention": ["best always", "always best"],
+  "expected_entities": ["LangGraph", "CrewAI"],
+  "expected_claims": [
+    "LangGraph emphasizes durable graph state and checkpoints",
+    "CrewAI emphasizes role-based agent workflows"
+  ],
+  "required_uncertainty_phrases": ["depends on requirements"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["langgraph_docs", "crewai_docs"]
+}

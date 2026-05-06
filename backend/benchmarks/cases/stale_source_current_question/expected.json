@@ -1,0 +1,12 @@
+{
+  "must_mention": ["2021"],
+  "must_not_mention": ["current price is $9"],
+  "expected_numbers": ["2021", "$9"],
+  "expected_dates": ["2021"],
+  "required_warnings": ["outdated"],
+  "required_uncertainty_phrases": ["cannot confirm"],
+  "forbidden_claims": ["The current API pricing is $9"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["archived_pricing"],
+  "expected_confidence_max": 0.6
+}

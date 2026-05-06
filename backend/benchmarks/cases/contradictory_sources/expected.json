@@ -1,0 +1,9 @@
+{
+  "must_mention": ["25 MB", "100 MB"],
+  "expected_numbers": ["25 MB", "100 MB"],
+  "required_warnings": ["conflicting"],
+  "required_uncertainty_phrases": ["conflicting sources"],
+  "forbidden_claims": ["The maximum upload size is definitely 100 MB"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["help_center", "api_reference"]
+}

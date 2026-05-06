@@ -1,0 +1,31 @@
+{
+  "case_id": "numeric_claims",
+  "title": "Latency numbers and unit preservation",
+  "description": "Checks numeric extraction, entity association, and unsupported percentage claims.",
+  "category": "numeric_reasoning",
+  "difficulty": "moderate",
+  "question": "Summarize the benchmark latency numbers in the provided source.",
+  "urls": ["benchmark://numeric_claims/latency_table"],
+  "local_sources": [
+    {
+      "source_id": "latency_table",
+      "url": "benchmark://numeric_claims/latency_table",
+      "local_path": "sources/latency_table.md",
+      "title": "Latency Benchmark Notes",
+      "source_type": "md",
+      "trust_level": "untrusted"
+    }
+  ],
+  "tags": ["numeric", "latency", "units"],
+  "traps": [
+    {
+      "trap_id": "swapped_latency",
+      "trap_type": "conflicting_number",
+      "description": "Model A and Model B numbers must not be swapped.",
+      "source_id": "latency_table",
+      "expected_detection": "numeric values",
+      "severity": "high"
+    }
+  ],
+  "scoring_profile": {"profile_id": "numeric_strict", "minimum_passing_score": 0.72, "strict_numeric": true}
+}

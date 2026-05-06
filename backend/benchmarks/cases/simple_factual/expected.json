@@ -1,0 +1,10 @@
+{
+  "must_mention": ["120 requests per minute"],
+  "must_not_mention": ["1,000 requests per day", "unlimited"],
+  "expected_entities": ["Acme Research API"],
+  "expected_numbers": ["120 requests per minute"],
+  "expected_claims": ["The Acme Research API allows 120 requests per minute"],
+  "forbidden_claims": ["The Acme Research API is unlimited"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["source_1"]
+}

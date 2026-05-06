@@ -1,0 +1,32 @@
+{
+  "case_id": "simple_factual",
+  "title": "Simple factual API rate limit",
+  "description": "Checks whether a clear factual answer is preserved without inventing extra limits.",
+  "category": "simple_factual",
+  "difficulty": "easy",
+  "question": "What does the provided source say about the Acme Research API rate limit?",
+  "urls": ["benchmark://simple_factual/source_1"],
+  "local_sources": [
+    {
+      "source_id": "source_1",
+      "url": "benchmark://simple_factual/source_1",
+      "local_path": "sources/source_1.md",
+      "title": "Acme Research API Limits",
+      "source_type": "md",
+      "trust_level": "untrusted",
+      "expected_role": "direct_answer"
+    }
+  ],
+  "tags": ["smoke", "factual", "offline"],
+  "traps": [
+    {
+      "trap_id": "invented_limit",
+      "trap_type": "unsupported_recommendation",
+      "description": "Do not invent daily or monthly limits.",
+      "source_id": "source_1",
+      "expected_detection": "provided sources only",
+      "severity": "medium"
+    }
+  ],
+  "scoring_profile": {"profile_id": "strict_smoke", "minimum_passing_score": 0.7}
+}

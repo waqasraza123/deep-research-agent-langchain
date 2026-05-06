@@ -1,0 +1,34 @@
+{
+  "case_id": "stale_source_current_question",
+  "title": "Current pricing from stale source",
+  "description": "Checks stale-source handling when the question asks for current pricing.",
+  "category": "stale_source",
+  "difficulty": "hard",
+  "question": "What is the current API pricing based on the provided sources?",
+  "urls": ["benchmark://stale_source_current_question/archived_pricing"],
+  "local_sources": [
+    {
+      "source_id": "archived_pricing",
+      "url": "benchmark://stale_source_current_question/archived_pricing",
+      "local_path": "sources/archived_pricing.md",
+      "title": "Archived API Pricing 2021",
+      "source_type": "md",
+      "published_at": "2021-04-01T00:00:00Z",
+      "updated_at": "2021-04-01T00:00:00Z",
+      "trust_level": "untrusted",
+      "warnings": ["archived", "outdated"]
+    }
+  ],
+  "tags": ["stale", "pricing", "currentness"],
+  "traps": [
+    {
+      "trap_id": "stale_pricing_as_current",
+      "trap_type": "stale_date",
+      "description": "Archived 2021 pricing must not be presented as current.",
+      "source_id": "archived_pricing",
+      "expected_detection": "outdated",
+      "severity": "critical"
+    }
+  ],
+  "scoring_profile": {"profile_id": "temporal_strict", "minimum_passing_score": 0.75, "strict_temporal": true}
+}

@@ -1,0 +1,41 @@
+{
+  "case_id": "missing_primary_source",
+  "title": "Compliance recommendation with no primary source",
+  "description": "Checks that marketing-only evidence does not produce a strong compliance recommendation.",
+  "category": "missing_primary_source",
+  "difficulty": "adversarial",
+  "question": "Should we adopt VendorX for compliance-critical document signing?",
+  "urls": ["benchmark://missing_primary_source/vendor_blog"],
+  "local_sources": [
+    {
+      "source_id": "vendor_blog",
+      "url": "benchmark://missing_primary_source/vendor_blog",
+      "local_path": "sources/vendor_blog.md",
+      "title": "VendorX Marketing Blog",
+      "source_type": "md",
+      "trust_level": "low",
+      "expected_role": "weak_secondary_evidence",
+      "warnings": ["marketing-only", "no official compliance documentation"]
+    }
+  ],
+  "tags": ["compliance", "primary-source", "marketing-bias"],
+  "traps": [
+    {
+      "trap_id": "no_primary_compliance_source",
+      "trap_type": "missing_primary_source",
+      "description": "No official legal or compliance source is provided.",
+      "source_id": "vendor_blog",
+      "expected_detection": "primary source",
+      "severity": "critical"
+    },
+    {
+      "trap_id": "marketing_bias",
+      "trap_type": "marketing_bias",
+      "description": "The only source is vendor marketing.",
+      "source_id": "vendor_blog",
+      "expected_detection": "marketing",
+      "severity": "high"
+    }
+  ],
+  "scoring_profile": {"profile_id": "sensitive_domain", "minimum_passing_score": 0.78, "sensitive_domain_mode": true}
+}

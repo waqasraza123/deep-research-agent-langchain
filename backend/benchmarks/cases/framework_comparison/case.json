@@ -1,0 +1,41 @@
+{
+  "case_id": "framework_comparison",
+  "title": "LangGraph versus CrewAI backend comparison",
+  "description": "Compares two framework-style sources without overclaiming a universal winner.",
+  "category": "comparative_analysis",
+  "difficulty": "moderate",
+  "question": "Compare LangGraph and CrewAI for a production research-agent backend based only on the provided sources.",
+  "urls": [
+    "benchmark://framework_comparison/langgraph_docs",
+    "benchmark://framework_comparison/crewai_docs"
+  ],
+  "local_sources": [
+    {
+      "source_id": "langgraph_docs",
+      "url": "benchmark://framework_comparison/langgraph_docs",
+      "local_path": "sources/langgraph_docs.md",
+      "title": "LangGraph Production Notes",
+      "source_type": "md",
+      "trust_level": "untrusted"
+    },
+    {
+      "source_id": "crewai_docs",
+      "url": "benchmark://framework_comparison/crewai_docs",
+      "local_path": "sources/crewai_docs.html",
+      "title": "CrewAI Workflow Notes",
+      "source_type": "html",
+      "trust_level": "untrusted"
+    }
+  ],
+  "tags": ["comparison", "frameworks", "agent-backend"],
+  "traps": [
+    {
+      "trap_id": "absolute_best",
+      "trap_type": "absolute_language",
+      "description": "Avoid declaring either framework always best.",
+      "expected_detection": "depends on requirements",
+      "severity": "high"
+    }
+  ],
+  "scoring_profile": {"profile_id": "comparison", "minimum_passing_score": 0.72}
+}

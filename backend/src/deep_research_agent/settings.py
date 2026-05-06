@@ -113,6 +113,20 @@ class Settings:
     replay_plan_enabled: bool = True
     confidence_threshold_for_review: float = 0.55
     benchmark_path: Path | None = None
+    evaluation_lab_enabled: bool = True
+    evaluation_lab_cases_dir: Path | None = None
+    evaluation_lab_runs_dir: Path | None = None
+    evaluation_lab_allow_benchmark_scheme: bool = False
+    evaluation_lab_default_use_mock_agent: bool = True
+    evaluation_lab_default_use_offline_fetcher: bool = True
+    evaluation_lab_fail_on_invalid_case: bool = True
+    evaluation_lab_max_cases_per_run: int = 25
+    evaluation_lab_copy_run_artifacts: bool = True
+    evaluation_lab_minimum_passing_score: float = 0.75
+    evaluation_lab_strict_adversarial_checks: bool = True
+    evaluation_lab_strict_numeric_checks: bool = True
+    evaluation_lab_strict_temporal_checks: bool = True
+    evaluation_lab_strict_citation_checks: bool = False
     memory_stale_after_days: int = 30
     max_memory_results: int = 20
     source_scoring_threshold: float = 0.45
@@ -241,6 +255,8 @@ class Settings:
         runs_dir = REPO_ROOT / "runs"
         memory_data_dir_raw = _env_str("MEMORY_DATA_DIR", "")
         benchmark_path_raw = _env_str("BENCHMARK_PATH", "")
+        evaluation_lab_cases_dir_raw = _env_str("EVALUATION_LAB_CASES_DIR", "")
+        evaluation_lab_runs_dir_raw = _env_str("EVALUATION_LAB_RUNS_DIR", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
         runtime_sqlite_path_raw = _env_str("RUNTIME_SQLITE_PATH", "")
 
@@ -359,6 +375,56 @@ class Settings:
             benchmark_path=Path(benchmark_path_raw)
             if benchmark_path_raw
             else REPO_ROOT / "benchmarks",
+            evaluation_lab_enabled=_env_str("EVALUATION_LAB_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_cases_dir=Path(evaluation_lab_cases_dir_raw)
+            if evaluation_lab_cases_dir_raw
+            else REPO_ROOT / "backend" / "benchmarks" / "cases",
+            evaluation_lab_runs_dir=Path(evaluation_lab_runs_dir_raw)
+            if evaluation_lab_runs_dir_raw
+            else REPO_ROOT / "backend" / "benchmark_runs",
+            evaluation_lab_allow_benchmark_scheme=_env_str(
+                "EVALUATION_LAB_ALLOW_BENCHMARK_SCHEME", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_default_use_mock_agent=_env_str(
+                "EVALUATION_LAB_DEFAULT_USE_MOCK_AGENT", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_default_use_offline_fetcher=_env_str(
+                "EVALUATION_LAB_DEFAULT_USE_OFFLINE_FETCHER", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_fail_on_invalid_case=_env_str(
+                "EVALUATION_LAB_FAIL_ON_INVALID_CASE", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_max_cases_per_run=_clamp_int(
+                _env_int("EVALUATION_LAB_MAX_CASES_PER_RUN", 25), 1, 500
+            ),
+            evaluation_lab_copy_run_artifacts=_env_str(
+                "EVALUATION_LAB_COPY_RUN_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_minimum_passing_score=_env_float(
+                "EVALUATION_LAB_MINIMUM_PASSING_SCORE", 0.75
+            ),
+            evaluation_lab_strict_adversarial_checks=_env_str(
+                "EVALUATION_LAB_STRICT_ADVERSARIAL_CHECKS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_strict_numeric_checks=_env_str(
+                "EVALUATION_LAB_STRICT_NUMERIC_CHECKS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_strict_temporal_checks=_env_str(
+                "EVALUATION_LAB_STRICT_TEMPORAL_CHECKS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_strict_citation_checks=_env_str(
+                "EVALUATION_LAB_STRICT_CITATION_CHECKS", "false"
+            ).lower()
+            in ("1", "true", "yes"),
             memory_stale_after_days=_clamp_int(_env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650),
             max_memory_results=_clamp_int(_env_int("MAX_MEMORY_RESULTS", 20), 1, 500),
             source_scoring_threshold=_env_float("SOURCE_SCORING_THRESHOLD", 0.45),

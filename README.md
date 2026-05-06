@@ -506,6 +506,79 @@ Generated artifacts include `hypotheses.json`, `hypotheses.md`, `hypothesis_test
 later synthesis and evaluation. They are not proof, and they do not replace human review for legal,
 medical, financial, security, or other high-stakes conclusions.
 
+## Research Evaluation Lab
+
+The backend includes a backend-only Research Evaluation Lab under
+`deep_research_agent.evaluation_lab`. It provides offline, deterministic regression benchmarks for
+research-agent behavior: local cases, fixture source loading, `benchmark://` URL simulation,
+mock-agent execution, artifact validation, expected-output checks, hallucination-risk checks,
+citation checks, temporal checks, numeric checks, adversarial checks, scoring, reports, and API
+endpoints.
+
+Benchmark cases are versioned under `backend/benchmarks/cases/<case_id>/`:
+
+- `case.json` defines the case id, title, category, difficulty, question, `benchmark://` URLs,
+  local source fixtures, tags, traps, and scoring profile overrides.
+- `expected.json` defines must-mention and must-not-mention phrases, expected entities, numbers,
+  dates, claims, forbidden claims, required warnings, required artifacts, expected citation sources,
+  and optional confidence bounds.
+- `sources/` contains local Markdown, HTML, text, CSV, PDF, or DOCX fixtures. The evaluation lab
+  computes content hashes and treats fixture text as untrusted evidence.
+
+The initial corpus covers:
+
+- `simple_factual`
+- `framework_comparison`
+- `prompt_injection_source`
+- `stale_source_current_question`
+- `contradictory_sources`
+- `numeric_claims`
+- `missing_primary_source`
+
+The `benchmark://case_id/source_id` scheme is accepted only by the evaluation lab offline fetcher.
+Normal `/run` behavior still uses the existing source fetcher and does not enable benchmark fixture
+URLs unless explicitly configured for evaluation. Mock benchmark runs are deterministic, write the
+guaranteed `plan.md`, `notes.md`, `sources.json`, and `report.md`, mark mock mode clearly, and do not
+call OpenAI, Ollama, external search, or the network.
+
+Scoring dimensions are deterministic heuristics: artifact integrity, answer relevance, expected
+content coverage, source traceability, citation support, numeric accuracy, temporal handling,
+contradiction handling, adversarial resistance, uncertainty handling, overclaiming control, and
+required warning coverage. Scores are regression signals for engineering work, not semantic proof.
+The checks are intentionally conservative around stale sources, missing primary sources, numeric
+swaps, unsupported numbers or dates, unknown citations, prompt-injection leakage, and strong
+recommendations from weak evidence.
+
+API endpoints:
+
+- `GET /evaluation-lab/cases?category=&tag=&difficulty=`
+- `GET /evaluation-lab/cases/{case_id}`
+- `POST /evaluation-lab/validate`
+- `POST /evaluation-lab/run`
+- `GET /evaluation-lab/runs/{run_id}`
+- `GET /evaluation-lab/runs/{run_id}/summary?format=json|md`
+- `POST /evaluation-lab/compare`
+- `GET /evaluation-lab/profiles`
+
+Example run request:
+
+```json
+{
+  "case_ids": ["simple_factual", "numeric_claims"],
+  "use_mock_agent": true,
+  "use_offline_fetcher": true
+}
+```
+
+Outputs are written under `backend/benchmark_runs/<run_id>/`, including `benchmark_run.json`,
+`benchmark_run.md`, `evaluation_lab_summary.json`, `evaluation_lab_summary.md`, and per-case
+`case_result.*`, `benchmark_*_checks.*`, and `benchmark_score.*` artifacts.
+
+Known limitations: deterministic checks cannot fully judge semantic correctness, paraphrases may be
+missed, and mock mode is for infrastructure/offline testing rather than production-quality research.
+Live model behavior can differ from mock behavior, so these benchmarks should guide regression work
+instead of being treated as absolute truth.
+
 ## Artifacts
 
 Each run writes artifacts under `runs/<thread_id>/`. Core artifacts include:

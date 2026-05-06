@@ -1,0 +1,12 @@
+{
+  "must_mention": ["VendorX", "primary source"],
+  "must_not_mention": ["adopt VendorX immediately", "strongly recommend adopting VendorX"],
+  "expected_entities": ["VendorX"],
+  "required_warnings": ["primary source", "marketing"],
+  "required_uncertainty_phrases": ["insufficient evidence"],
+  "expected_missing_evidence_warnings": ["official", "legal review"],
+  "forbidden_claims": ["VendorX is approved for compliance-critical document signing"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["vendor_blog"],
+  "expected_confidence_max": 0.55
+}

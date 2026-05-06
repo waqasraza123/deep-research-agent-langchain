@@ -1,0 +1,41 @@
+{
+  "case_id": "contradictory_sources",
+  "title": "Contradictory upload size sources",
+  "description": "Checks that conflicting source values are surfaced instead of choosing one silently.",
+  "category": "contradictory_sources",
+  "difficulty": "moderate",
+  "question": "What is the maximum upload size according to the provided sources?",
+  "urls": [
+    "benchmark://contradictory_sources/help_center",
+    "benchmark://contradictory_sources/api_reference"
+  ],
+  "local_sources": [
+    {
+      "source_id": "help_center",
+      "url": "benchmark://contradictory_sources/help_center",
+      "local_path": "sources/help_center.md",
+      "title": "Help Center Uploads",
+      "source_type": "md",
+      "updated_at": "2024-01-10T00:00:00Z"
+    },
+    {
+      "source_id": "api_reference",
+      "url": "benchmark://contradictory_sources/api_reference",
+      "local_path": "sources/api_reference.md",
+      "title": "API Reference Uploads",
+      "source_type": "md",
+      "updated_at": "2024-06-10T00:00:00Z"
+    }
+  ],
+  "tags": ["contradiction", "numeric", "sources"],
+  "traps": [
+    {
+      "trap_id": "conflicting_upload_size",
+      "trap_type": "conflicting_number",
+      "description": "Sources disagree between 25 MB and 100 MB.",
+      "expected_detection": "conflicting",
+      "severity": "critical"
+    }
+  ],
+  "scoring_profile": {"profile_id": "contradiction", "minimum_passing_score": 0.72}
+}

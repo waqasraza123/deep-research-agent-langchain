@@ -55,6 +55,19 @@ from .evaluation import EVALUATION_ARTIFACTS, rebuild_evaluation_artifacts
 from .evaluation.benchmark import list_benchmark_cases
 from .evaluation.contracts import model_to_plain as evaluation_model_to_plain
 from .evaluation.regression_runner import run_regression_suite
+from .evaluation_lab import EvaluationLabRunner
+from .evaluation_lab.contracts import (
+    DEFAULT_WEIGHTS as EVALUATION_LAB_DEFAULT_WEIGHTS,
+)
+from .evaluation_lab.contracts import (
+    BenchmarkRunRequest as EvaluationLabRunRequest,
+)
+from .evaluation_lab.contracts import (
+    ScoringProfile as EvaluationLabScoringProfile,
+)
+from .evaluation_lab.contracts import (
+    model_to_plain as evaluation_lab_model_to_plain,
+)
 from .evidence import rebuild_evidence_artifacts
 from .hypotheses import (
     HYPOTHESIS_ARTIFACTS,
@@ -278,6 +291,11 @@ class RunDiffRequest(BaseModel):
 
 class BenchmarkRunRequest(BaseModel):
     case_ids: list[str] = Field(default_factory=list)
+
+
+class EvaluationLabCompareRequest(BaseModel):
+    baseline_run_id: str
+    current_run_id: str
 
 
 class SourceAuditRequest(BaseModel):
@@ -1499,6 +1517,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     orchestration_executor = OrchestrationExecutor(settings.runs_dir)
     protocol_registry = ProtocolRegistry()
     agent_control_plane = AgentControlPlane(runs_dir=settings.runs_dir, runtime_settings=settings)
+    evaluation_lab_runner = EvaluationLabRunner(settings)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -3749,6 +3768,103 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             case_ids=request.case_ids or None,
         )
         return evaluation_model_to_plain(result)
+
+    @app.get("/evaluation-lab/cases")
+    def evaluation_lab_cases(
+        category: str | None = Query(default=None),
+        tag: str | None = Query(default=None),
+        difficulty: str | None = Query(default=None),
+    ) -> list[dict[str, Any]]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        cases = evaluation_lab_runner.list_cases(
+            categories=[category] if category else None,
+            tags=[tag] if tag else None,
+            difficulty=difficulty,
+        )
+        return [evaluation_lab_model_to_plain(case) for case in cases]
+
+    @app.get("/evaluation-lab/cases/{case_id}")
+    def evaluation_lab_case(case_id: str) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        try:
+            return evaluation_lab_model_to_plain(evaluation_lab_runner.get_case(case_id))
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/validate")
+    def evaluation_lab_validate(req: EvaluationLabRunRequest | None = None) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        try:
+            return evaluation_lab_runner.validate(req or EvaluationLabRunRequest(run_all=True))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/run")
+    def evaluation_lab_run(req: EvaluationLabRunRequest | None = None) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        request = req or EvaluationLabRunRequest(run_all=True)
+        if request.max_cases is None:
+            request = request.copy(
+                update={"max_cases": settings.evaluation_lab_max_cases_per_run}
+            )
+        try:
+            result = evaluation_lab_runner.run_cases(request)
+            return evaluation_lab_model_to_plain(result)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/runs/{run_id}")
+    def evaluation_lab_run_get(run_id: str) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        try:
+            return evaluation_lab_model_to_plain(evaluation_lab_runner.read_run(run_id))
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/runs/{run_id}/summary")
+    def evaluation_lab_run_summary(
+        run_id: str,
+        format: str = Query(default="json", pattern="^(json|md|markdown)$"),
+    ):
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        try:
+            if format in {"md", "markdown"}:
+                return PlainTextResponse(
+                    str(evaluation_lab_runner.read_summary(run_id, markdown=True)),
+                    media_type="text/markdown",
+                )
+            return evaluation_lab_model_to_plain(evaluation_lab_runner.read_summary(run_id))
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/compare")
+    def evaluation_lab_compare(req: EvaluationLabCompareRequest) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
+        try:
+            return evaluation_lab_model_to_plain(
+                evaluation_lab_runner.compare_runs(req.baseline_run_id, req.current_run_id)
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/profiles")
+    def evaluation_lab_profiles() -> list[dict[str, Any]]:
+        default = EvaluationLabScoringProfile(
+            profile_id="default",
+            weights=dict(EVALUATION_LAB_DEFAULT_WEIGHTS),
+            minimum_passing_score=settings.evaluation_lab_minimum_passing_score,
+            strict_citations=settings.evaluation_lab_strict_citation_checks,
+            strict_temporal=settings.evaluation_lab_strict_temporal_checks,
+            strict_numeric=settings.evaluation_lab_strict_numeric_checks,
+        )
+        return [evaluation_lab_model_to_plain(default)]
 
     @app.get("/memory/search")
     def memory_search(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=100)):

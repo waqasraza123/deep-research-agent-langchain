@@ -1,0 +1,9 @@
+{
+  "must_mention": ["Model A", "Model B", "220 ms", "310 ms"],
+  "expected_entities": ["Model A", "Model B"],
+  "expected_numbers": ["220 ms", "310 ms"],
+  "expected_claims": ["Model A latency: 220 ms", "Model B latency: 310 ms"],
+  "forbidden_claims": ["Model A latency: 310 ms", "Model B latency: 220 ms"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["latency_table"]
+}
