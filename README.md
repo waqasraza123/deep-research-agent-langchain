@@ -155,6 +155,7 @@ Most-used endpoints:
 - `GET /runs/{thread_id}/provenance`
 - `GET /runs/{thread_id}/reproducibility`
 - `GET /runs/{thread_id}/replay-plan`
+- `POST /runs/{thread_id}/replay`
 - `GET /runs/{thread_id}/advanced-intelligence-summary`
 - `POST /runs/diff`
 - `GET /runs/{thread_id}/events`
@@ -277,6 +278,22 @@ Known limitations:
 - Passing the Evaluation Lab smoke gate does not prove live model quality.
 - Rebuild workflows use available artifacts and cannot recover missing source evidence unless
   refetch or model calls are explicitly allowed.
+
+## Provenance Replay
+
+Each completed run can now be replayed into a separate run directory with:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/replay \
+  -H 'content-type: application/json' \
+  -d '{"offline_only":true}'
+```
+
+Replay copies only seed artifacts needed for deterministic reconstruction, rewrites
+`runs/<source_thread_id>/...` source references to the replay thread, rebuilds offline intelligence
+layers, writes `replay_execution.json` / `.md`, refreshes provenance, and returns a manifest diff
+plus expected-hash matches and mismatches. It does not refetch live URLs or rerun model-dependent
+agent generation in offline mode, so report text and source payloads are treated as captured inputs.
 
 ## Agentic Research Control Plane
 

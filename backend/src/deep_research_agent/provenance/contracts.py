@@ -6,6 +6,14 @@ from pydantic import BaseModel, Field
 
 DependencyKind = Literal["input", "source", "model", "settings", "artifact", "subsystem"]
 ReproducibilityStatus = Literal["replayable", "partially_replayable", "not_replayable"]
+ReplayExecutionStatus = Literal[
+    "planned",
+    "running",
+    "completed",
+    "completed_with_warnings",
+    "failed",
+]
+ReplayStepStatus = Literal["pending", "completed", "skipped", "failed"]
 
 
 class ArtifactDependency(BaseModel):
@@ -133,6 +141,19 @@ class ReplayPlan(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ReplayExecutionStep(BaseModel):
+    step_id: str
+    name: str
+    status: ReplayStepStatus = "pending"
+    offline: bool = True
+    copied_artifacts: list[str] = Field(default_factory=list)
+    generated_artifacts: list[str] = Field(default_factory=list)
+    skipped_artifacts: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ArtifactDiffSummary(BaseModel):
     added_artifacts: list[str] = Field(default_factory=list)
     removed_artifacts: list[str] = Field(default_factory=list)
@@ -141,3 +162,23 @@ class ArtifactDiffSummary(BaseModel):
     changed_hashes: dict[str, dict[str, str | None]] = Field(default_factory=dict)
     changed_sizes: dict[str, dict[str, int | None]] = Field(default_factory=dict)
     changed_producer_subsystems: dict[str, dict[str, str | None]] = Field(default_factory=dict)
+
+
+class ReplayExecutionSummary(BaseModel):
+    execution_version: str = "1.0"
+    source_thread_id: str
+    replay_thread_id: str
+    generated_at: str
+    status: ReplayExecutionStatus = "planned"
+    offline_only: bool = True
+    plan: ReplayPlan | None = None
+    steps: list[ReplayExecutionStep] = Field(default_factory=list)
+    copied_seed_artifacts: list[str] = Field(default_factory=list)
+    rebuilt_layers: list[str] = Field(default_factory=list)
+    skipped_layers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    baseline_diff: ArtifactDiffSummary | None = None
+    hash_matches: list[str] = Field(default_factory=list)
+    hash_mismatches: dict[str, dict[str, str | None]] = Field(default_factory=dict)
+    missing_expected_artifacts: list[str] = Field(default_factory=list)
+    replay_artifacts: list[str] = Field(default_factory=list)

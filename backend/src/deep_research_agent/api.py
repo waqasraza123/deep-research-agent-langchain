@@ -134,12 +134,15 @@ from .protocols import (
 from .protocols.errors import ProtocolError
 from .provenance import (
     diff_run_dirs,
+    finalize_replay_execution,
+    prepare_replay_run,
     read_or_build_dependency_graph,
     read_or_build_manifest,
     read_or_build_replay_plan,
     read_or_build_reproducibility,
     refresh_provenance_artifacts,
 )
+from .provenance.contracts import ReplayExecutionStep
 from .quantitative import (
     QUANTITATIVE_ARTIFACTS,
     QuantitativeSummary,
@@ -321,6 +324,34 @@ class CleanupApplyRequest(BaseModel):
 class RunDiffRequest(BaseModel):
     left_thread_id: str
     right_thread_id: str
+
+
+class RunReplayRequest(BaseModel):
+    replay_thread_id: str | None = None
+    allow_overwrite: bool = False
+    offline_only: bool = True
+    fail_on_layer_error: bool = False
+    include_artifacts: list[str] | None = None
+    rebuild_layers: list[str] | None = None
+    question_override: str | None = Field(default=None, min_length=5)
+
+
+DEFAULT_REPLAY_REBUILD_LAYERS = (
+    "source_safety",
+    "source_audit",
+    "document_intelligence",
+    "retrieval",
+    "temporal",
+    "quantitative",
+    "evidence",
+    "hypotheses",
+    "synthesis",
+    "verification",
+    "evaluation",
+    "summaries",
+    "intelligence_kernel",
+    "provenance",
+)
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -4770,6 +4801,320 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "thread_id": thread_id,
             "summary": agent_control_model_to_plain(summary),
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
+
+    @app.post("/runs/{thread_id}/replay")
+    def run_replay(thread_id: str, req: RunReplayRequest | None = None) -> dict[str, Any]:
+        req = req or RunReplayRequest()
+        source_run = run_repository.get_or_none(thread_id)
+        question = (
+            req.question_override.strip()
+            if req.question_override
+            else (source_run.question if source_run is not None else f"Replay run {thread_id}")
+        )
+        urls = source_run.urls if source_run is not None else []
+        try:
+            baseline_manifest = read_or_build_manifest(
+                settings.runs_dir,
+                thread_id,
+                run=source_run,
+            )
+            plan = read_or_build_replay_plan(settings.runs_dir, thread_id, run=source_run)
+            prepared = prepare_replay_run(
+                runs_dir=settings.runs_dir,
+                source_thread_id=thread_id,
+                replay_thread_id=req.replay_thread_id,
+                plan=plan,
+                source_manifest=baseline_manifest,
+                include_artifacts=req.include_artifacts,
+                allow_overwrite=req.allow_overwrite,
+                offline_only=req.offline_only,
+            )
+        except FileExistsError as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Replay run already exists and is not empty: {e}",
+            ) from e
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        replay_id = prepared.replay_thread_id
+        replay_settings = settings_snapshot_from_object(settings)
+        replay_settings["replay"] = {
+            "source_thread_id": thread_id,
+            "offline_only": req.offline_only,
+            "requested_layers": req.rebuild_layers or list(DEFAULT_REPLAY_REBUILD_LAYERS),
+        }
+        run_repository.create(
+            thread_id=replay_id,
+            question=question,
+            urls=urls,
+            settings_snapshot=replay_settings,
+            require_review=False,
+        )
+        for status in (
+            RunStatus.PLANNING,
+            RunStatus.FETCHING_SOURCES,
+            RunStatus.ANALYZING,
+            RunStatus.WRITING_REPORT,
+            RunStatus.BUILDING_EVIDENCE,
+        ):
+            run_repository.transition(replay_id, status)
+
+        td = ensure_thread_dir(settings.runs_dir, replay_id)
+        selected_layers = req.rebuild_layers or list(DEFAULT_REPLAY_REBUILD_LAYERS)
+        invalid_layers = sorted(set(selected_layers) - set(DEFAULT_REPLAY_REBUILD_LAYERS))
+        if invalid_layers:
+            run_repository.record_error(
+                replay_id,
+                "Invalid replay rebuild layer requested",
+                details={"invalid_layers": invalid_layers},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid replay rebuild layers: {', '.join(invalid_layers)}",
+            )
+
+        warnings = list(prepared.warnings)
+        steps = list(prepared.steps)
+        rebuilt_layers: list[str] = []
+        skipped_layers: list[str] = []
+
+        def _replay_sources() -> list[dict[str, Any]]:
+            data = _load_json_file(td / "sources.json")
+            return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+        def _run_layer(layer: str, fn) -> None:
+            if layer not in selected_layers:
+                skipped_layers.append(layer)
+                steps.append(
+                    ReplayExecutionStep(
+                        step_id=layer,
+                        name=f"Replay layer: {layer}",
+                        status="skipped",
+                        offline=True,
+                    )
+                )
+                return
+            before = {artifact.path for artifact in list_artifacts(settings.runs_dir, replay_id)}
+            before_warning_count = len(warnings)
+            try:
+                fn()
+            except Exception as e:
+                log.exception("replay layer failed: %s", layer)
+                message = f"{layer} replay failed: {type(e).__name__}: {e}"
+                warnings.append(message)
+                steps.append(
+                    ReplayExecutionStep(
+                        step_id=layer,
+                        name=f"Replay layer: {layer}",
+                        status="failed",
+                        offline=True,
+                        warnings=warnings[before_warning_count:],
+                        error=message,
+                    )
+                )
+                if req.fail_on_layer_error:
+                    run_repository.record_error(
+                        replay_id,
+                        e,
+                        details={"source_thread_id": thread_id, "layer": layer},
+                    )
+                    raise
+                return
+            after = {artifact.path for artifact in list_artifacts(settings.runs_dir, replay_id)}
+            rebuilt_layers.append(layer)
+            steps.append(
+                ReplayExecutionStep(
+                    step_id=layer,
+                    name=f"Replay layer: {layer}",
+                    status="completed",
+                    offline=True,
+                    generated_artifacts=sorted(after - before),
+                    warnings=warnings[before_warning_count:],
+                )
+            )
+
+        try:
+            _run_layer(
+                "source_safety",
+                lambda: _write_source_safety_for_manifest(
+                    settings=settings,
+                    thread_dir=td,
+                    thread_id=replay_id,
+                    question=question,
+                ),
+            )
+            _run_layer(
+                "source_audit",
+                lambda: _write_audit_for_sources(
+                    thread_dir=td,
+                    thread_id=replay_id,
+                    question=question,
+                    sources=_replay_sources(),
+                ),
+            )
+            _run_layer(
+                "document_intelligence",
+                lambda: _write_document_intelligence_for_sources(
+                    settings=settings,
+                    thread_dir=td,
+                    thread_id=replay_id,
+                    sources=_replay_sources(),
+                ),
+            )
+            _run_layer(
+                "retrieval",
+                lambda: _try_rebuild_retrieval(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    question=question,
+                    warnings=warnings,
+                ),
+            )
+            _run_layer(
+                "temporal",
+                lambda: _try_rebuild_temporal(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    question=question,
+                    warnings=warnings,
+                    include_claims=True,
+                ),
+            )
+            _run_layer(
+                "quantitative",
+                lambda: _try_rebuild_quantitative(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    warnings=warnings,
+                ),
+            )
+            _run_layer("evidence", lambda: rebuild_evidence_artifacts(td, thread_id=replay_id))
+            _run_layer(
+                "hypotheses",
+                lambda: _try_rebuild_hypotheses(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    warnings=warnings,
+                ),
+            )
+            _run_layer(
+                "synthesis",
+                lambda: rebuild_synthesis_artifacts(td, thread_id=replay_id, replace_report=True),
+            )
+            _run_layer(
+                "verification",
+                lambda: _try_rebuild_verification(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    warnings=warnings,
+                ),
+            )
+            _run_layer("evaluation", lambda: _try_rebuild_evaluation(td, replay_id, warnings))
+            _run_layer(
+                "summaries",
+                lambda: (
+                    _try_rebuild_intelligence_summary(
+                        settings=settings,
+                        td=td,
+                        thread_id=replay_id,
+                        warnings=warnings,
+                    ),
+                    _write_pipeline_summary(
+                        settings=settings,
+                        td=td,
+                        thread_id=replay_id,
+                        question=question,
+                    ),
+                    _try_write_advanced_summary(
+                        td=td,
+                        thread_id=replay_id,
+                        question=question,
+                        warnings=warnings,
+                    ),
+                ),
+            )
+            _run_layer(
+                "intelligence_kernel",
+                lambda: _try_rebuild_kernel(
+                    settings=settings,
+                    td=td,
+                    thread_id=replay_id,
+                    question=question,
+                    urls=urls,
+                    warnings=warnings,
+                ),
+            )
+            _run_layer("provenance", lambda: _refresh_provenance_for_run(replay_id))
+        except Exception as e:
+            summary = finalize_replay_execution(
+                runs_dir=settings.runs_dir,
+                source_thread_id=thread_id,
+                replay_thread_id=replay_id,
+                baseline_manifest=baseline_manifest,
+                plan=plan,
+                steps=steps,
+                rebuilt_layers=rebuilt_layers,
+                skipped_layers=skipped_layers,
+                warnings=warnings,
+                offline_only=req.offline_only,
+            )
+            run_repository.set_warnings(replay_id, warnings)
+            run_repository.refresh_artifacts(replay_id)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": f"{type(e).__name__}: {e}",
+                    "replay": _model_dump_jsonable(summary),
+                },
+            ) from e
+
+        summary = finalize_replay_execution(
+            runs_dir=settings.runs_dir,
+            source_thread_id=thread_id,
+            replay_thread_id=replay_id,
+            baseline_manifest=baseline_manifest,
+            plan=plan,
+            steps=steps,
+            rebuilt_layers=rebuilt_layers,
+            skipped_layers=skipped_layers,
+            warnings=warnings,
+            offline_only=req.offline_only,
+        )
+        replay_warnings = [
+            *warnings,
+            *[f"Replay hash mismatch: {artifact}" for artifact in summary.hash_mismatches],
+            *[
+                f"Replay expected artifact missing: {artifact}"
+                for artifact in summary.missing_expected_artifacts
+            ],
+        ]
+        run_repository.set_warnings(replay_id, replay_warnings)
+        run_repository.refresh_artifacts(replay_id)
+        RunLifecycle(run_repository, replay_id).complete(
+            require_review=False,
+            summary=(
+                f"Replay of {thread_id}: {summary.status}; "
+                f"rebuilt_layers={len(summary.rebuilt_layers)}; "
+                f"hash_mismatches={len(summary.hash_mismatches)}."
+            ),
+        )
+        if settings.provenance_enabled and settings.provenance_manifest_enabled:
+            _refresh_provenance_for_run(replay_id)
+            run_repository.refresh_artifacts(replay_id)
+        return {
+            "thread_id": replay_id,
+            "source_thread_id": thread_id,
+            "summary": _model_dump_jsonable(summary),
+            "run": run_detail(run_repository.get(replay_id)),
         }
 
     @app.get("/runs/{thread_id}/artifacts")
