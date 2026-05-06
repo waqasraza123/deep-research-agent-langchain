@@ -187,6 +187,12 @@ from .runs.integrity import (
     read_run_integrity_report,
     render_run_integrity_report_markdown,
 )
+from .runs.handoff import (
+    RunHandoffRequest,
+    build_run_handoff_manifest,
+    read_run_handoff_manifest,
+    render_run_handoff_manifest_markdown,
+)
 from .runs.lifecycle import RunLifecycle
 from .runs.operator_audit import (
     record_operator_event,
@@ -5229,6 +5235,76 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_run_disclosure_report_markdown(report))
+
+    @app.post("/runs/{thread_id}/handoff")
+    def run_handoff_create(
+        thread_id: str,
+        req: RunHandoffRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or RunHandoffRequest()
+        try:
+            run = run_repository.get(thread_id)
+            manifest = build_run_handoff_manifest(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                run=run,
+                request=request,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff manifest generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.manifest_generated",
+            actor=manifest.requested_by,
+            summary="Run handoff manifest was generated.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["handoff_manifest.json", "handoff_manifest.md"],
+            metadata={
+                "readiness": manifest.readiness,
+                "blocker_count": len(manifest.blockers),
+                "warning_count": len(manifest.warnings),
+                "recipient": manifest.recipient,
+                "purpose": manifest.purpose,
+                "required_controls": manifest.required_controls,
+            },
+        )
+        run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "manifest": _model_dump_jsonable(manifest),
+            "markdown_url": f"/runs/{thread_id}/handoff/markdown",
+        }
+
+    @app.get("/runs/{thread_id}/handoff")
+    def run_handoff_get(thread_id: str) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(read_run_handoff_manifest(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff manifest not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/handoff/markdown")
+    def run_handoff_markdown(thread_id: str):
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            manifest = read_run_handoff_manifest(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff manifest not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_run_handoff_manifest_markdown(manifest))
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:

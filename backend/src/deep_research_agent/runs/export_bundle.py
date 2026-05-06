@@ -40,6 +40,7 @@ PUBLIC_INCLUDE_PATTERNS = (
     "custody_certificate.*",
     "integrity_report.*",
     "disclosure_report.*",
+    "handoff_manifest.*",
     "quality_score.*",
     "evaluation.*",
     "verification_report.*",

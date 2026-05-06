@@ -30,6 +30,8 @@ DYNAMIC_ARTIFACTS = {
     "integrity_report.md",
     "disclosure_report.json",
     "disclosure_report.md",
+    "handoff_manifest.json",
+    "handoff_manifest.md",
 }
 
 

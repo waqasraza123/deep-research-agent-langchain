@@ -95,6 +95,9 @@ Use `POST /runs/{thread_id}/disclosure` after integrity verification when the ne
 handoff. Integrity verifies file drift; disclosure focuses on likely secrets, raw source exposure,
 and redaction posture.
 
+Use `POST /runs/{thread_id}/handoff` after disclosure scanning to consolidate all handoff controls
+into one final readiness manifest.
+
 The report is a local deterministic verification artifact. It does not replace centralized logging,
 immutable storage, external checksums, access controls, or qualified human review for high-stakes
 research outputs.

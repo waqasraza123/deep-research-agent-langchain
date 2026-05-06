@@ -44,6 +44,8 @@ traceable artifacts under `runs/<thread_id>/`.
 - Run disclosure reports that scan artifacts and export manifests for raw source exposure, likely
   secrets, oversized text artifacts, and redaction-risk handoff issues. See
   `docs/run-disclosure.md`.
+- Final run handoff manifests that consolidate review, retention, export, custody, integrity,
+  disclosure, and operator-audit gates into one go/no-go record. See `docs/run-handoff.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -206,6 +208,9 @@ Most-used endpoints:
 - `POST /runs/{thread_id}/disclosure`
 - `GET /runs/{thread_id}/disclosure`
 - `GET /runs/{thread_id}/disclosure/markdown`
+- `POST /runs/{thread_id}/handoff`
+- `GET /runs/{thread_id}/handoff`
+- `GET /runs/{thread_id}/handoff/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -388,6 +393,17 @@ curl http://localhost:8000/runs/<thread_id>/disclosure \
 The disclosure report writes `disclosure_report.json` / `.md` and flags likely secrets, raw source
 artifacts, export redaction settings, raw-source export inclusion, and oversized text artifacts that
 need manual review.
+
+Generate the final handoff manifest after review/export/custody/integrity/disclosure controls:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/handoff \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator","recipient":"external-review","purpose":"audit_handoff"}'
+```
+
+The handoff manifest writes `handoff_manifest.json` / `.md` and reports a single readiness state
+from all required handoff gates.
 
 ## Agentic Research Control Plane
 
@@ -807,6 +823,7 @@ Retention policies write `retention_policy.json` / `.md` and are honored by clea
 Custody certificates write `custody_certificate.json` / `.md` for final handoff readiness.
 Integrity reports write `integrity_report.json` / `.md` for artifact drift checks.
 Disclosure reports write `disclosure_report.json` / `.md` for external handoff risk review.
+Handoff manifests write `handoff_manifest.json` / `.md` for final go/no-go review.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

@@ -26,6 +26,8 @@ CONTROL_ARTIFACTS = {
     "custody_certificate.md",
     "integrity_report.json",
     "integrity_report.md",
+    "handoff_manifest.json",
+    "handoff_manifest.md",
     DISCLOSURE_REPORT_JSON,
     DISCLOSURE_REPORT_MD,
 }

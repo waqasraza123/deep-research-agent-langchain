@@ -85,6 +85,10 @@ public or customer-facing packages, use `require_no_high_risk=true`, keep export
 and exclude raw source payloads unless the recipient is explicitly authorized to receive captured
 source text.
 
+Use `POST /runs/{thread_id}/handoff` after disclosure scanning when you need a single final
+go/no-go manifest across review, retention, export, custody, integrity, disclosure, and audit
+controls.
+
 This report is a deterministic local review aid. It does not replace data classification, DLP,
 centralized secret scanning, legal review, access controls, or qualified human review for
 high-stakes outputs.

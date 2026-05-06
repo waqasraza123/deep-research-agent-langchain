@@ -109,3 +109,6 @@ archive manifest, and operator-audit chains.
 
 Before external disclosure, use `POST /runs/{thread_id}/disclosure` to scan for likely secrets,
 raw source exposure, raw-source export settings, and oversized text artifacts that were not scanned.
+
+Use `POST /runs/{thread_id}/handoff` after custody, integrity, and disclosure controls have been
+generated when the operator needs one final go/no-go manifest.
