@@ -48,6 +48,8 @@ traceable artifacts under `runs/<thread_id>/`.
   disclosure, and operator-audit gates into one go/no-go record. See `docs/run-handoff.md`.
 - Repository-level handoff registries that index all run handoff readiness states and missing
   controls in global JSON/Markdown artifacts. See `docs/handoff-registry.md`.
+- Handoff release manifests that turn registry-ready runs into auditable release batches for
+  external or internal transfer. See `docs/handoff-release.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -216,6 +218,10 @@ Most-used endpoints:
 - `POST /runs/handoff-registry`
 - `GET /runs/handoff-registry`
 - `GET /runs/handoff-registry/markdown`
+- `POST /runs/handoff-releases`
+- `GET /runs/handoff-releases`
+- `GET /runs/handoff-releases/{release_id}`
+- `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -420,6 +426,18 @@ curl http://localhost:8000/runs/handoff-registry \
 
 The registry writes `runs/_handoff/handoff_registry.json` / `.md` and summarizes ready, blocked,
 needs-attention, missing-control, and invalid-audit counts across indexed runs.
+
+Create a release manifest for registry-ready run packages:
+
+```bash
+curl http://localhost:8000/runs/handoff-releases \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator","recipient":"external-review"}'
+```
+
+The release writes `runs/_handoff/releases/<release_id>/handoff_release.json` / `.md` and records
+which registry snapshot, run packages, export hashes, and required controls were used for the
+release decision.
 
 ## Agentic Research Control Plane
 

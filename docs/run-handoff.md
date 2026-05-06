@@ -97,4 +97,5 @@ replace legal review, data classification, immutable storage, or centralized aud
 
 After individual runs have handoff manifests, generate the repository-level registry documented in
 `docs/handoff-registry.md` to produce a global queue of ready, blocked, and needs-attention run
-packages.
+packages. Use the release manifests documented in `docs/handoff-release.md` when you need an
+auditable record of which ready run packages were selected for transfer.

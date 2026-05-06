@@ -193,6 +193,13 @@ from .runs.handoff import (
     read_run_handoff_manifest,
     render_run_handoff_manifest_markdown,
 )
+from .runs.handoff_release import (
+    HandoffReleaseRequest,
+    build_handoff_release_manifest,
+    list_handoff_release_manifests,
+    read_handoff_release_manifest,
+    render_handoff_release_markdown,
+)
 from .runs.handoff_registry import (
     HandoffRegistryRequest,
     build_handoff_registry,
@@ -4880,6 +4887,74 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_registry_markdown(registry))
+
+    @app.post("/runs/handoff-releases")
+    def handoff_release_create(req: HandoffReleaseRequest | None = None) -> dict[str, Any]:
+        request = req or HandoffReleaseRequest()
+        try:
+            release = build_handoff_release_manifest(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff registry not found; generate it before creating a release.",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_generated",
+            actor=release.requested_by,
+            summary="Repository handoff release manifest was generated.",
+            artifacts=release.artifacts,
+            metadata={
+                "release_id": release.release_id,
+                "readiness": release.readiness,
+                "selected_runs": release.summary.selected_runs,
+                "ready_runs": release.summary.ready_runs,
+                "blocked_runs": release.summary.blocked_runs,
+                "missing_requested_runs": release.summary.missing_requested_runs,
+                "recipient": release.recipient,
+                "purpose": release.purpose,
+                "required_controls": release.required_controls,
+                "overwrite_existing": request.overwrite_existing,
+            },
+        )
+        return {
+            "release": _model_dump_jsonable(release),
+            "markdown_url": f"/runs/handoff-releases/{release.release_id}/markdown",
+        }
+
+    @app.get("/runs/handoff-releases")
+    def handoff_release_list() -> list[dict[str, Any]]:
+        try:
+            releases = list_handoff_release_manifests(settings.runs_dir)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return [_model_dump_jsonable(release) for release in releases]
+
+    @app.get("/runs/handoff-releases/{release_id}")
+    def handoff_release_get(release_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_handoff_release_manifest(settings.runs_dir, release_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff release not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-releases/{release_id}/markdown")
+    def handoff_release_markdown(release_id: str):
+        try:
+            release = read_handoff_release_manifest(settings.runs_dir, release_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff release not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_markdown(release))
 
     @app.get("/runs/{thread_id}")
     def run_get(thread_id: str) -> dict[str, Any]:

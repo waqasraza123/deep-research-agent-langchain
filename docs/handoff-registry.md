@@ -82,3 +82,7 @@ artifacts such as retention, export, custody, integrity, or disclosure reports.
 
 The registry complements `docs/run-handoff.md`; it does not replace the per-run manifest, immutable
 storage, legal review, or centralized audit logging.
+
+After reviewing the registry, use `POST /runs/handoff-releases` as documented in
+`docs/handoff-release.md` to create a release-batch manifest for the run packages selected for
+transfer.
