@@ -175,6 +175,12 @@ from .runs.export_bundle import (
     export_bundle_path,
     read_export_manifest,
 )
+from .runs.integrity import (
+    RunIntegrityRequest,
+    build_run_integrity_report,
+    read_run_integrity_report,
+    render_run_integrity_report_markdown,
+)
 from .runs.lifecycle import RunLifecycle
 from .runs.operator_audit import (
     record_operator_event,
@@ -5078,6 +5084,76 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_run_custody_certificate_markdown(certificate))
+
+    @app.post("/runs/{thread_id}/integrity")
+    def run_integrity_create(
+        thread_id: str,
+        req: RunIntegrityRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or RunIntegrityRequest()
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            report = build_run_integrity_report(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=request,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("integrity report generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="integrity.report_generated",
+            actor=report.requested_by,
+            summary="Run integrity report was generated.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["integrity_report.json", "integrity_report.md"],
+            metadata={
+                "readiness": report.readiness,
+                "failure_count": len(report.failures),
+                "warning_count": len(report.warnings),
+                "artifact_count": report.artifact_inventory.artifact_count,
+                "hashed_count": report.artifact_inventory.hashed_count,
+                "require_provenance_manifest": request.require_provenance_manifest,
+                "require_custody_certificate": request.require_custody_certificate,
+                "require_export_bundle": request.require_export_bundle,
+            },
+        )
+        run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "report": _model_dump_jsonable(report),
+            "markdown_url": f"/runs/{thread_id}/integrity/markdown",
+        }
+
+    @app.get("/runs/{thread_id}/integrity")
+    def run_integrity_get(thread_id: str) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(read_run_integrity_report(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Integrity report not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/integrity/markdown")
+    def run_integrity_markdown(thread_id: str):
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            report = read_run_integrity_report(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Integrity report not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_run_integrity_report_markdown(report))
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:

@@ -102,3 +102,7 @@ if the recipient must receive `custody_certificate.*` inside the archive.
 The certificate is a local deterministic readiness artifact. It does not replace centralized audit
 logging, durable storage, access controls, or qualified human review for legal, medical, financial,
 security, or other high-stakes conclusions.
+
+After custody generation, use `POST /runs/{thread_id}/integrity` when you need to check whether
+the current artifact directory still matches the provenance manifest, custody hash inventory, export
+archive manifest, and operator-audit chains.
