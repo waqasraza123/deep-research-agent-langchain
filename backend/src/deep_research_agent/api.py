@@ -170,6 +170,11 @@ from .runs.export_bundle import (
     read_export_manifest,
 )
 from .runs.lifecycle import RunLifecycle
+from .runs.operator_audit import (
+    record_operator_event,
+    read_operator_events,
+    verify_operator_audit,
+)
 from .runs.repository import (
     RunCancelledError,
     RunListFilters,
@@ -1689,6 +1694,37 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             )
         except Exception:
             log.exception("provenance refresh failed for run %s", thread_id)
+
+    def _record_operator_audit(
+        *,
+        event_type: str,
+        actor: str = "operator",
+        summary: str = "",
+        thread_id: str | None = None,
+        affected_thread_ids: list[str] | None = None,
+        artifacts: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            event = record_operator_event(
+                runs_dir=settings.runs_dir,
+                event_type=event_type,
+                actor=actor,
+                summary=summary,
+                thread_id=thread_id,
+                affected_thread_ids=affected_thread_ids,
+                artifacts=artifacts,
+                metadata=metadata,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("operator audit write failed")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Operator audit write failed: {type(e).__name__}: {e}",
+            ) from e
+        return _model_dump_jsonable(event)
 
     def _agent_control_settings(
         overrides: dict[str, Any] | None = None,
@@ -4566,6 +4602,28 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         )
         return [run_summary(item) for item in run_repository.list(filters)]
 
+    @app.get("/operator-audit")
+    def operator_audit(
+        thread_id: str | None = None,
+        limit: int = Query(default=200, ge=1, le=2000),
+    ) -> list[dict[str, Any]]:
+        if thread_id is not None and run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            events = read_operator_events(settings.runs_dir, thread_id=thread_id, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return [_model_dump_jsonable(event) for event in events]
+
+    @app.get("/operator-audit/verify")
+    def operator_audit_verify(thread_id: str | None = None) -> dict[str, Any]:
+        if thread_id is not None and run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(verify_operator_audit(settings.runs_dir, thread_id))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.get("/runs/cleanup/plan")
     def cleanup_plan(
         stale_after_hours: int = Query(default=24, ge=1),
@@ -4591,6 +4649,21 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        deleted_thread_ids = [
+            item.thread_id for item in applied.items if item.thread_id in set(req.thread_ids)
+        ]
+        _record_operator_audit(
+            event_type="cleanup.apply",
+            actor="operator",
+            summary="Cleanup apply deleted eligible run directories.",
+            affected_thread_ids=deleted_thread_ids,
+            metadata={
+                "requested_thread_ids": req.thread_ids,
+                "deleted_thread_ids": deleted_thread_ids,
+                "confirm_delete": req.confirm_delete,
+                "protected_thread_ids": [item.thread_id for item in applied.protected_items],
+            },
+        )
         return model_to_dict(applied)
 
     @app.post("/runs/{thread_id}/retention")
@@ -4617,6 +4690,22 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Run directory not found") from None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        _record_operator_audit(
+            event_type="retention.policy_set",
+            actor=req.requested_by,
+            summary="Run retention policy was set.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["retention_policy.json", "retention_policy.md"],
+            metadata={
+                "retention_class": policy.retention_class,
+                "retain_until": policy.retain_until,
+                "delete_after": policy.delete_after,
+                "legal_hold": policy.legal_hold,
+                "reason": policy.reason,
+                "warnings": policy.warnings,
+            },
+        )
         return _model_dump_jsonable(policy)
 
     @app.get("/runs/{thread_id}/retention")
@@ -4643,6 +4732,21 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Run directory not found") from None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        active_hold_ids = [hold.hold_id for hold in policy.active_holds]
+        _record_operator_audit(
+            event_type="retention.hold_added",
+            actor=req.requested_by,
+            summary="Run retention hold was added.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["retention_policy.json", "retention_policy.md"],
+            metadata={
+                "requested_hold_id": req.hold_id,
+                "active_hold_ids": active_hold_ids,
+                "reason": req.reason,
+                "legal_hold": policy.legal_hold,
+            },
+        )
         return _model_dump_jsonable(policy)
 
     @app.post("/runs/{thread_id}/retention/release")
@@ -4660,6 +4764,20 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Retention policy not found") from None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        _record_operator_audit(
+            event_type="retention.hold_released",
+            actor=req.released_by,
+            summary="Run retention hold was released.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["retention_policy.json", "retention_policy.md"],
+            metadata={
+                "requested_hold_id": req.hold_id,
+                "active_hold_ids": [hold.hold_id for hold in policy.active_holds],
+                "release_reason": req.reason,
+                "legal_hold": policy.legal_hold,
+            },
+        )
         return _model_dump_jsonable(policy)
 
     @app.post("/runs/diff")
@@ -4738,6 +4856,21 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except Exception as e:
             log.exception("review dossier generation failed")
             raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="review.dossier_generated",
+            actor=(dossier.reviewer or "operator"),
+            summary="Human review dossier was generated.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["review_dossier.json", "review_dossier.md"],
+            metadata={
+                "recommended_decision": dossier.recommended_decision,
+                "blocker_count": len(dossier.blockers),
+                "warning_count": len(dossier.warnings),
+                "required_action_count": len(dossier.required_actions),
+                "confidence_score": dossier.confidence_score,
+            },
+        )
         return {
             "thread_id": thread_id,
             "dossier": _model_dump_jsonable(dossier),
@@ -4766,47 +4899,71 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.post("/runs/{thread_id}/review/approve")
     def review_approve(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
         try:
-            return model_to_dict(
-                approve_review(
-                    run_repository,
-                    thread_id,
-                    reviewer=req.reviewer,
-                    notes=req.notes,
-                )
+            review = approve_review(
+                run_repository,
+                thread_id,
+                reviewer=req.reviewer,
+                notes=req.notes,
             )
         except RunNotFoundError:
             raise HTTPException(status_code=404, detail="Run not found") from None
         except InvalidRunTransitionError as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
+        _record_operator_audit(
+            event_type="review.approved",
+            actor=req.reviewer,
+            summary="Run review was approved.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            metadata={"notes": req.notes},
+        )
+        return model_to_dict(review)
 
     @app.post("/runs/{thread_id}/review/request-changes")
     def review_request_changes(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
         try:
-            return model_to_dict(
-                request_changes(
-                    run_repository,
-                    thread_id,
-                    reviewer=req.reviewer,
-                    notes=req.notes,
-                    requested_changes=req.requested_changes,
-                )
+            review = request_changes(
+                run_repository,
+                thread_id,
+                reviewer=req.reviewer,
+                notes=req.notes,
+                requested_changes=req.requested_changes,
             )
         except RunNotFoundError:
             raise HTTPException(status_code=404, detail="Run not found") from None
+        _record_operator_audit(
+            event_type="review.changes_requested",
+            actor=req.reviewer,
+            summary="Run review requested changes.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            metadata={
+                "notes": req.notes,
+                "requested_changes": req.requested_changes,
+            },
+        )
+        return model_to_dict(review)
 
     @app.post("/runs/{thread_id}/review/reject")
     def review_reject(thread_id: str, req: ReviewActionRequest) -> dict[str, Any]:
         try:
-            return model_to_dict(
-                reject_review(
-                    run_repository,
-                    thread_id,
-                    reviewer=req.reviewer,
-                    notes=req.notes,
-                )
+            review = reject_review(
+                run_repository,
+                thread_id,
+                reviewer=req.reviewer,
+                notes=req.notes,
             )
         except RunNotFoundError:
             raise HTTPException(status_code=404, detail="Run not found") from None
+        _record_operator_audit(
+            event_type="review.rejected",
+            actor=req.reviewer,
+            summary="Run review was rejected.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            metadata={"notes": req.notes},
+        )
+        return model_to_dict(review)
 
     @app.get("/runs/{thread_id}/events")
     def run_events(thread_id: str) -> list[dict[str, Any]]:
@@ -4819,6 +4976,28 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         if runtime_job is not None and not events:
             return [event.dict() for event in runtime_repository.list_events(runtime_job.job_id)]
         return events
+
+    @app.get("/runs/{thread_id}/operator-audit")
+    def run_operator_audit(
+        thread_id: str,
+        limit: int = Query(default=200, ge=1, le=2000),
+    ) -> list[dict[str, Any]]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            events = read_operator_events(settings.runs_dir, thread_id=thread_id, limit=limit)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return [_model_dump_jsonable(event) for event in events]
+
+    @app.get("/runs/{thread_id}/operator-audit/verify")
+    def run_operator_audit_verify(thread_id: str) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(verify_operator_audit(settings.runs_dir, thread_id))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:
@@ -5248,6 +5427,25 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         if settings.provenance_enabled and settings.provenance_manifest_enabled:
             _refresh_provenance_for_run(replay_id)
             run_repository.refresh_artifacts(replay_id)
+        _record_operator_audit(
+            event_type="replay.executed",
+            actor="operator",
+            summary="Offline replay execution completed.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id, replay_id],
+            artifacts=["replay_execution.json", "replay_execution.md"],
+            metadata={
+                "source_thread_id": thread_id,
+                "replay_thread_id": replay_id,
+                "status": summary.status,
+                "offline_only": summary.offline_only,
+                "rebuilt_layers": summary.rebuilt_layers,
+                "skipped_layers": summary.skipped_layers,
+                "hash_mismatches": summary.hash_mismatches,
+                "missing_expected_artifacts": summary.missing_expected_artifacts,
+                "warnings": summary.warnings,
+            },
+        )
         return {
             "thread_id": replay_id,
             "source_thread_id": thread_id,
@@ -5261,11 +5459,12 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.post("/runs/{thread_id}/export")
     def run_export_create(thread_id: str, req: RunExportRequest | None = None) -> dict[str, Any]:
+        request = req or RunExportRequest()
         try:
             manifest = build_run_export_bundle(
                 runs_dir=settings.runs_dir,
                 thread_id=thread_id,
-                request=req or RunExportRequest(),
+                request=request,
             )
             if run_repository.get_or_none(thread_id) is not None:
                 run_repository.refresh_artifacts(thread_id)
@@ -5276,6 +5475,29 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except Exception as e:
             log.exception("run export failed")
             raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="export.bundle_created",
+            actor="operator",
+            summary="Audit-ready run export bundle was created.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=[
+                "exports/run_export.zip",
+                "exports/export_manifest.json",
+                "exports/export_manifest.md",
+            ],
+            metadata={
+                "profile": manifest.profile,
+                "include_raw_sources": manifest.include_raw_sources,
+                "include_internal": manifest.include_internal,
+                "redact": manifest.redact,
+                "exported_count": manifest.exported_count,
+                "skipped_count": manifest.skipped_count,
+                "archive_size_bytes": manifest.archive_size_bytes,
+                "archive_sha256": manifest.archive_sha256,
+                "notes": request.notes,
+            },
+        )
         return {
             "thread_id": thread_id,
             "manifest": _model_dump_jsonable(manifest),

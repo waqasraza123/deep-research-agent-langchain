@@ -33,6 +33,9 @@ traceable artifacts under `runs/<thread_id>/`.
   `docs/review-dossier.md`.
 - Run retention policies and legal holds that protect runs from cleanup until explicit retention
   conditions are satisfied. See `docs/run-retention.md`.
+- Append-only operator audit trails for review, retention, replay, export, and cleanup actions,
+  with per-run and global JSONL/Markdown logs plus hash-chain verification. See
+  `docs/operator-audit.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -182,6 +185,10 @@ Most-used endpoints:
 - `GET /runs/{thread_id}/retention`
 - `POST /runs/{thread_id}/retention/hold`
 - `POST /runs/{thread_id}/retention/release`
+- `GET /operator-audit`
+- `GET /operator-audit/verify`
+- `GET /runs/{thread_id}/operator-audit`
+- `GET /runs/{thread_id}/operator-audit/verify`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
