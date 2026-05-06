@@ -94,3 +94,7 @@ regenerate the handoff manifest.
 For external packages that must include the final handoff manifest, regenerate the export bundle
 after handoff generation. The manifest is a deterministic local operator artifact and does not
 replace legal review, data classification, immutable storage, or centralized audit logging.
+
+After individual runs have handoff manifests, generate the repository-level registry documented in
+`docs/handoff-registry.md` to produce a global queue of ready, blocked, and needs-attention run
+packages.

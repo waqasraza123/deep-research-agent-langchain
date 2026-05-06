@@ -193,6 +193,12 @@ from .runs.handoff import (
     read_run_handoff_manifest,
     render_run_handoff_manifest_markdown,
 )
+from .runs.handoff_registry import (
+    HandoffRegistryRequest,
+    build_handoff_registry,
+    read_handoff_registry,
+    render_handoff_registry_markdown,
+)
 from .runs.lifecycle import RunLifecycle
 from .runs.operator_audit import (
     record_operator_event,
@@ -4819,6 +4825,61 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return _model_dump_jsonable(summary)
+
+    @app.post("/runs/handoff-registry")
+    def handoff_registry_create(req: HandoffRegistryRequest | None = None) -> dict[str, Any]:
+        request = req or HandoffRegistryRequest()
+        try:
+            registry = build_handoff_registry(
+                runs_dir=settings.runs_dir,
+                runs=run_repository.list(),
+                request=request,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff registry generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.registry_generated",
+            actor=registry.requested_by,
+            summary="Repository handoff registry was generated.",
+            artifacts=registry.artifacts,
+            metadata={
+                "indexed_runs": registry.summary.indexed_runs,
+                "ready_for_handoff": registry.summary.ready_for_handoff,
+                "needs_attention": registry.summary.needs_attention,
+                "blocked": registry.summary.blocked,
+                "missing_handoff": registry.summary.missing_handoff,
+                "operator_audit_invalid": registry.summary.operator_audit_invalid,
+                "include_runs_without_handoff": request.include_runs_without_handoff,
+                "require_operator_audit_valid": request.require_operator_audit_valid,
+                "max_runs": request.max_runs,
+            },
+        )
+        return {
+            "registry": _model_dump_jsonable(registry),
+            "markdown_url": "/runs/handoff-registry/markdown",
+        }
+
+    @app.get("/runs/handoff-registry")
+    def handoff_registry_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_handoff_registry(settings.runs_dir))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff registry not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-registry/markdown")
+    def handoff_registry_markdown():
+        try:
+            registry = read_handoff_registry(settings.runs_dir)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff registry not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_registry_markdown(registry))
 
     @app.get("/runs/{thread_id}")
     def run_get(thread_id: str) -> dict[str, Any]:

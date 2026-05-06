@@ -46,6 +46,8 @@ traceable artifacts under `runs/<thread_id>/`.
   `docs/run-disclosure.md`.
 - Final run handoff manifests that consolidate review, retention, export, custody, integrity,
   disclosure, and operator-audit gates into one go/no-go record. See `docs/run-handoff.md`.
+- Repository-level handoff registries that index all run handoff readiness states and missing
+  controls in global JSON/Markdown artifacts. See `docs/handoff-registry.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -211,6 +213,9 @@ Most-used endpoints:
 - `POST /runs/{thread_id}/handoff`
 - `GET /runs/{thread_id}/handoff`
 - `GET /runs/{thread_id}/handoff/markdown`
+- `POST /runs/handoff-registry`
+- `GET /runs/handoff-registry`
+- `GET /runs/handoff-registry/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -404,6 +409,17 @@ curl http://localhost:8000/runs/<thread_id>/handoff \
 
 The handoff manifest writes `handoff_manifest.json` / `.md` and reports a single readiness state
 from all required handoff gates.
+
+Build a repository-level handoff registry after per-run handoff manifests:
+
+```bash
+curl http://localhost:8000/runs/handoff-registry \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator","max_runs":500}'
+```
+
+The registry writes `runs/_handoff/handoff_registry.json` / `.md` and summarizes ready, blocked,
+needs-attention, missing-control, and invalid-audit counts across indexed runs.
 
 ## Agentic Research Control Plane
 
