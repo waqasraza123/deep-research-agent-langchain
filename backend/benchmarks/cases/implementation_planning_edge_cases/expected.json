@@ -1,0 +1,7 @@
+{
+  "must_mention": ["retry", "idempotency", "backoff", "dead-letter", "test plan"],
+  "must_not_mention": ["redesign the UI", "landing page"],
+  "expected_claims": ["use idempotency keys", "use exponential backoff", "dead-letter failed events"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["retry_policy"]
+}

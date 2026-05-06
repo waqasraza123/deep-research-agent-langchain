@@ -1,0 +1,31 @@
+{
+  "case_id": "implementation_planning_edge_cases",
+  "title": "Webhook retry implementation planning",
+  "description": "Checks implementation planning includes reliability edge cases and avoids irrelevant UI work.",
+  "category": "implementation_planning",
+  "difficulty": "hard",
+  "question": "Based on the provided source, create an implementation plan for adding webhook retries.",
+  "urls": ["benchmark://implementation_planning_edge_cases/retry_policy"],
+  "local_sources": [
+    {
+      "source_id": "retry_policy",
+      "url": "benchmark://implementation_planning_edge_cases/retry_policy",
+      "local_path": "sources/retry_policy.md",
+      "title": "Webhook Retry Policy",
+      "source_type": "md",
+      "trust_level": "untrusted"
+    }
+  ],
+  "tags": ["implementation_planning", "webhooks", "retries"],
+  "traps": [
+    {
+      "trap_id": "irrelevant_ui_work",
+      "trap_type": "irrelevant_source",
+      "description": "The plan should not add unrelated frontend or UI work.",
+      "source_id": "retry_policy",
+      "expected_detection": "provided sources only",
+      "severity": "medium"
+    }
+  ],
+  "scoring_profile": {"profile_id": "planning", "minimum_passing_score": 0.72}
+}

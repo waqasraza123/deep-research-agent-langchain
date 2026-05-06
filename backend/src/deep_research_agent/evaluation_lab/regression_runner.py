@@ -524,6 +524,13 @@ class EvaluationLabRunner:
                 "- Warning: primary source is missing; official documentation, compliance "
                 "review, or legal review is required before adoption."
             )
+        if "fake_citation" in trap_text:
+            lines.append(
+                "- Warning: fake citation or unverifiable citation detected; cannot verify "
+                "the cited standard from the provided sources."
+            )
+        if "duplicate_source" in trap_text:
+            lines.append("- Warning: duplicate sources are not fully independent corroboration.")
         if "marketing_bias" in trap_text:
             lines.append(
                 "- Warning: the available source is marketing or vendor-controlled and may "

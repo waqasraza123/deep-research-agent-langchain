@@ -37,3 +37,8 @@ jobs:
         run: |
           cd backend
           pytest -q
+
+      - name: Evaluation Lab smoke gate
+        run: |
+          cd backend
+          python -m deep_research_agent.evaluation_lab gate --profile smoke

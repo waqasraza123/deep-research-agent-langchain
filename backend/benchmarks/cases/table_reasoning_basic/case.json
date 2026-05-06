@@ -1,0 +1,31 @@
+{
+  "case_id": "table_reasoning_basic",
+  "title": "Basic table reasoning",
+  "description": "Checks table extraction without inventing a contact-us price.",
+  "category": "table_reasoning",
+  "difficulty": "moderate",
+  "question": "Which plan has the lowest monthly cost and what are the request limits?",
+  "urls": ["benchmark://table_reasoning_basic/plans"],
+  "local_sources": [
+    {
+      "source_id": "plans",
+      "url": "benchmark://table_reasoning_basic/plans",
+      "local_path": "sources/plans.md",
+      "title": "Plan Limits Table",
+      "source_type": "md",
+      "trust_level": "untrusted"
+    }
+  ],
+  "tags": ["table", "numeric", "pricing"],
+  "traps": [
+    {
+      "trap_id": "invent_enterprise_price",
+      "trap_type": "unsupported_recommendation",
+      "description": "Enterprise price is Contact us and must not be invented.",
+      "source_id": "plans",
+      "expected_detection": "provided sources only",
+      "severity": "high"
+    }
+  ],
+  "scoring_profile": {"profile_id": "numeric_strict", "minimum_passing_score": 0.72, "strict_numeric": true}
+}

@@ -1,0 +1,8 @@
+{
+  "must_mention": ["duplicate", "independent"],
+  "must_not_mention": ["three independent sources agree"],
+  "expected_claims": ["two sources are duplicates or not fully independent"],
+  "required_warnings": ["duplicate"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["source_a", "source_b", "source_c"]
+}

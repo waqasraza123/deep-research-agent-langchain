@@ -1,0 +1,29 @@
+{
+  "case_id": "duplicate_sources",
+  "title": "Duplicate source independence",
+  "description": "Checks that duplicate sources are not counted as independent corroboration.",
+  "category": "source_quality",
+  "difficulty": "moderate",
+  "question": "Summarize the provided sources and note whether they are independent.",
+  "urls": [
+    "benchmark://duplicate_sources/source_a",
+    "benchmark://duplicate_sources/source_b",
+    "benchmark://duplicate_sources/source_c"
+  ],
+  "local_sources": [
+    {"source_id": "source_a", "url": "benchmark://duplicate_sources/source_a", "local_path": "sources/source_a.md", "title": "Retry Guide A", "source_type": "md"},
+    {"source_id": "source_b", "url": "benchmark://duplicate_sources/source_b", "local_path": "sources/source_b.md", "title": "Retry Guide B", "source_type": "md"},
+    {"source_id": "source_c", "url": "benchmark://duplicate_sources/source_c", "local_path": "sources/source_c.md", "title": "Independent Ops Note", "source_type": "md"}
+  ],
+  "tags": ["source_quality", "duplicate_source", "dedupe"],
+  "traps": [
+    {
+      "trap_id": "duplicate_sources_independent",
+      "trap_type": "duplicate_source",
+      "description": "Two sources are near duplicates and not independent corroboration.",
+      "expected_detection": "duplicate",
+      "severity": "high"
+    }
+  ],
+  "scoring_profile": {"profile_id": "source_quality", "minimum_passing_score": 0.72}
+}

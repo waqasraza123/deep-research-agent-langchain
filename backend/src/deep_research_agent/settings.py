@@ -127,6 +127,19 @@ class Settings:
     evaluation_lab_strict_numeric_checks: bool = True
     evaluation_lab_strict_temporal_checks: bool = True
     evaluation_lab_strict_citation_checks: bool = False
+    evaluation_lab_gates_enabled: bool = True
+    evaluation_lab_baselines_dir: Path | None = None
+    evaluation_lab_default_gate_profile: str = "smoke"
+    evaluation_lab_gate_runs_dir: Path | None = None
+    evaluation_lab_fail_on_gate_error: bool = True
+    evaluation_lab_allow_baseline_promotion: bool = True
+    evaluation_lab_compare_against_baseline_by_default: bool = False
+    evaluation_lab_fail_on_missing_baseline: bool = False
+    evaluation_lab_warning_budget_enabled: bool = True
+    evaluation_lab_max_warning_growth_ratio: float = 1.25
+    evaluation_lab_max_serious_warnings: int = 0
+    evaluation_lab_ci_smoke_gate_enabled: bool = True
+    evaluation_lab_cli_exit_nonzero_on_gate_failure: bool = True
     memory_stale_after_days: int = 30
     max_memory_results: int = 20
     source_scoring_threshold: float = 0.45
@@ -257,6 +270,8 @@ class Settings:
         benchmark_path_raw = _env_str("BENCHMARK_PATH", "")
         evaluation_lab_cases_dir_raw = _env_str("EVALUATION_LAB_CASES_DIR", "")
         evaluation_lab_runs_dir_raw = _env_str("EVALUATION_LAB_RUNS_DIR", "")
+        evaluation_lab_baselines_dir_raw = _env_str("EVALUATION_LAB_BASELINES_DIR", "")
+        evaluation_lab_gate_runs_dir_raw = _env_str("EVALUATION_LAB_GATE_RUNS_DIR", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
         runtime_sqlite_path_raw = _env_str("RUNTIME_SQLITE_PATH", "")
 
@@ -425,6 +440,51 @@ class Settings:
                 "EVALUATION_LAB_STRICT_CITATION_CHECKS", "false"
             ).lower()
             in ("1", "true", "yes"),
+            evaluation_lab_gates_enabled=_env_str("EVALUATION_LAB_GATES_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_baselines_dir=Path(evaluation_lab_baselines_dir_raw)
+            if evaluation_lab_baselines_dir_raw
+            else REPO_ROOT / "backend" / "benchmarks" / "baselines",
+            evaluation_lab_default_gate_profile=_env_str(
+                "EVALUATION_LAB_DEFAULT_GATE_PROFILE", "smoke"
+            ),
+            evaluation_lab_gate_runs_dir=Path(evaluation_lab_gate_runs_dir_raw)
+            if evaluation_lab_gate_runs_dir_raw
+            else REPO_ROOT / "backend" / "benchmark_gate_runs",
+            evaluation_lab_fail_on_gate_error=_env_str(
+                "EVALUATION_LAB_FAIL_ON_GATE_ERROR", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_allow_baseline_promotion=_env_str(
+                "EVALUATION_LAB_ALLOW_BASELINE_PROMOTION", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_compare_against_baseline_by_default=_env_str(
+                "EVALUATION_LAB_COMPARE_AGAINST_BASELINE_BY_DEFAULT", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_fail_on_missing_baseline=_env_str(
+                "EVALUATION_LAB_FAIL_ON_MISSING_BASELINE", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_warning_budget_enabled=_env_str(
+                "EVALUATION_LAB_WARNING_BUDGET_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_max_warning_growth_ratio=_env_float(
+                "EVALUATION_LAB_MAX_WARNING_GROWTH_RATIO", 1.25
+            ),
+            evaluation_lab_max_serious_warnings=_clamp_int(
+                _env_int("EVALUATION_LAB_MAX_SERIOUS_WARNINGS", 0), 0, 1_000_000
+            ),
+            evaluation_lab_ci_smoke_gate_enabled=_env_str(
+                "EVALUATION_LAB_CI_SMOKE_GATE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            evaluation_lab_cli_exit_nonzero_on_gate_failure=_env_str(
+                "EVALUATION_LAB_CLI_EXIT_NONZERO_ON_GATE_FAILURE", "true"
+            ).lower()
+            in ("1", "true", "yes"),
             memory_stale_after_days=_clamp_int(_env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650),
             max_memory_results=_clamp_int(_env_int("MAX_MEMORY_RESULTS", 20), 1, 500),
             source_scoring_threshold=_env_float("SOURCE_SCORING_THRESHOLD", 0.45),
@@ -523,9 +583,7 @@ class Settings:
             in ("1", "true", "yes"),
             runtime_async_enabled=_env_str("RUNTIME_ASYNC_ENABLED", "false").lower()
             in ("1", "true", "yes"),
-            runtime_sqlite_path=Path(runtime_sqlite_path_raw)
-            if runtime_sqlite_path_raw
-            else None,
+            runtime_sqlite_path=Path(runtime_sqlite_path_raw) if runtime_sqlite_path_raw else None,
             runtime_worker_poll_interval_seconds=_env_float(
                 "RUNTIME_WORKER_POLL_INTERVAL_SECONDS", 1.0
             ),
@@ -537,12 +595,8 @@ class Settings:
             runtime_retry_backoff_initial_seconds=_env_float(
                 "RUNTIME_RETRY_BACKOFF_INITIAL_SECONDS", 2.0
             ),
-            runtime_retry_backoff_multiplier=_env_float(
-                "RUNTIME_RETRY_BACKOFF_MULTIPLIER", 2.0
-            ),
-            runtime_retry_backoff_max_seconds=_env_float(
-                "RUNTIME_RETRY_BACKOFF_MAX_SECONDS", 60.0
-            ),
+            runtime_retry_backoff_multiplier=_env_float("RUNTIME_RETRY_BACKOFF_MULTIPLIER", 2.0),
+            runtime_retry_backoff_max_seconds=_env_float("RUNTIME_RETRY_BACKOFF_MAX_SECONDS", 60.0),
             runtime_fail_on_budget_exceeded=_env_str(
                 "RUNTIME_FAIL_ON_BUDGET_EXCEEDED", "false"
             ).lower()

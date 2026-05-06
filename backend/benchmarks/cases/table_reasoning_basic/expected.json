@@ -1,0 +1,9 @@
+{
+  "must_mention": ["Basic", "$10", "1000", "Pro", "5000"],
+  "must_not_mention": ["Enterprise costs $"],
+  "expected_numbers": ["$10", "1000", "$25", "5000"],
+  "expected_claims": ["Basic has the lowest fixed monthly cost", "Pro has 5000 requests"],
+  "forbidden_claims": ["Enterprise costs $50"],
+  "required_artifacts": ["plan.md", "notes.md", "sources.json", "report.md"],
+  "expected_citation_sources": ["plans"]
+}

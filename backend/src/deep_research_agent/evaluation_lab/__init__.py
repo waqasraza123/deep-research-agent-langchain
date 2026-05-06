@@ -13,10 +13,13 @@ from .contracts import (
     BenchmarkRunRequest,
     BenchmarkRunResult,
     EvaluationLabSummary,
+    QualityGateRunRequest,
+    QualityGateRunResult,
     RegressionComparison,
     ScoringProfile,
     model_to_plain,
 )
+from .gate_runner import QualityGateRunner
 from .regression_runner import EvaluationLabRunner
 
 __all__ = [
@@ -25,6 +28,9 @@ __all__ = [
     "BenchmarkRunResult",
     "EvaluationLabRunner",
     "EvaluationLabSummary",
+    "QualityGateRunner",
+    "QualityGateRunRequest",
+    "QualityGateRunResult",
     "RegressionComparison",
     "ScoringProfile",
     "build_source_url_map",

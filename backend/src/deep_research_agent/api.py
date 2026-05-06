@@ -63,11 +63,18 @@ from .evaluation_lab.contracts import (
     BenchmarkRunRequest as EvaluationLabRunRequest,
 )
 from .evaluation_lab.contracts import (
+    QualityGateRunRequest as EvaluationLabGateRunRequest,
+)
+from .evaluation_lab.contracts import (
     ScoringProfile as EvaluationLabScoringProfile,
 )
 from .evaluation_lab.contracts import (
     model_to_plain as evaluation_lab_model_to_plain,
 )
+from .evaluation_lab.coverage import coverage_for_cases_root
+from .evaluation_lab.gate_runner import QualityGateRunner
+from .evaluation_lab.gates import get_gate_profile, list_gate_profiles
+from .evaluation_lab.warning_audit import summarize_warnings
 from .evidence import rebuild_evidence_artifacts
 from .hypotheses import (
     HYPOTHESIS_ARTIFACTS,
@@ -296,6 +303,23 @@ class BenchmarkRunRequest(BaseModel):
 class EvaluationLabCompareRequest(BaseModel):
     baseline_run_id: str
     current_run_id: str
+
+
+class EvaluationLabBaselinePromoteRequest(BaseModel):
+    run_id: str
+    gate_id: str = "smoke"
+    name: str = "Promoted baseline"
+    description: str = ""
+
+
+class EvaluationLabBaselineCompareRequest(BaseModel):
+    run_id: str
+    baseline_id: str
+
+
+class EvaluationLabWarningAuditRequest(BaseModel):
+    warnings: list[str] = Field(default_factory=list)
+    warning_text: str = ""
 
 
 class SourceAuditRequest(BaseModel):
@@ -1518,6 +1542,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     protocol_registry = ProtocolRegistry()
     agent_control_plane = AgentControlPlane(runs_dir=settings.runs_dir, runtime_settings=settings)
     evaluation_lab_runner = EvaluationLabRunner(settings)
+    quality_gate_runner = QualityGateRunner(settings, lab_runner=evaluation_lab_runner)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -3808,8 +3833,11 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             raise HTTPException(status_code=404, detail="Evaluation lab is disabled")
         request = req or EvaluationLabRunRequest(run_all=True)
         if request.max_cases is None:
-            request = request.copy(
-                update={"max_cases": settings.evaluation_lab_max_cases_per_run}
+            copier = getattr(request, "model_copy", None)
+            request = (
+                copier(update={"max_cases": settings.evaluation_lab_max_cases_per_run})
+                if callable(copier)
+                else request.copy(update={"max_cases": settings.evaluation_lab_max_cases_per_run})
             )
         try:
             result = evaluation_lab_runner.run_cases(request)
@@ -3865,6 +3893,139 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             strict_numeric=settings.evaluation_lab_strict_numeric_checks,
         )
         return [evaluation_lab_model_to_plain(default)]
+
+    @app.get("/evaluation-lab/gates")
+    def evaluation_lab_gates() -> list[dict[str, Any]]:
+        if not settings.evaluation_lab_enabled or not settings.evaluation_lab_gates_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab gates are disabled")
+        return [evaluation_lab_model_to_plain(profile) for profile in list_gate_profiles()]
+
+    @app.get("/evaluation-lab/gates/{gate_id}")
+    def evaluation_lab_gate(gate_id: str) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled or not settings.evaluation_lab_gates_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab gates are disabled")
+        try:
+            return evaluation_lab_model_to_plain(get_gate_profile(gate_id))
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/gates/run")
+    def evaluation_lab_gate_run(req: EvaluationLabGateRunRequest | None = None) -> dict[str, Any]:
+        if not settings.evaluation_lab_enabled or not settings.evaluation_lab_gates_enabled:
+            raise HTTPException(status_code=404, detail="Evaluation lab gates are disabled")
+        try:
+            request = req or EvaluationLabGateRunRequest(
+                gate_id=settings.evaluation_lab_default_gate_profile
+            )
+            return evaluation_lab_model_to_plain(quality_gate_runner.run_gate(request))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/gates/runs/{gate_run_id}")
+    def evaluation_lab_gate_run_get(gate_run_id: str) -> dict[str, Any]:
+        try:
+            return evaluation_lab_model_to_plain(quality_gate_runner.read_gate_run(gate_run_id))
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/gates/runs/{gate_run_id}/summary")
+    def evaluation_lab_gate_run_summary(
+        gate_run_id: str,
+        format: str = Query(default="json", pattern="^(json|md|markdown)$"),
+    ):
+        try:
+            if format in {"md", "markdown"}:
+                return PlainTextResponse(
+                    str(quality_gate_runner.read_governance_summary(gate_run_id, markdown=True)),
+                    media_type="text/markdown",
+                )
+            return quality_gate_runner.read_governance_summary(gate_run_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/gates/runs/{gate_run_id}/triage")
+    def evaluation_lab_gate_run_triage(gate_run_id: str) -> dict[str, Any]:
+        try:
+            return quality_gate_runner.read_triage(gate_run_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/baselines")
+    def evaluation_lab_baselines() -> list[dict[str, Any]]:
+        try:
+            return [
+                evaluation_lab_model_to_plain(baseline)
+                for baseline in quality_gate_runner.baseline_store.list_baselines()
+            ]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/baselines/{baseline_id}")
+    def evaluation_lab_baseline(baseline_id: str) -> dict[str, Any]:
+        try:
+            return evaluation_lab_model_to_plain(
+                quality_gate_runner.baseline_store.get_baseline(baseline_id)
+            )
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/baselines/promote")
+    def evaluation_lab_baseline_promote(
+        req: EvaluationLabBaselinePromoteRequest,
+    ) -> dict[str, Any]:
+        if not settings.evaluation_lab_allow_baseline_promotion:
+            raise HTTPException(status_code=403, detail="Baseline promotion is disabled")
+        try:
+            run = evaluation_lab_runner.read_run(req.run_id)
+            baseline = quality_gate_runner.baseline_store.promote_baseline(
+                run,
+                gate_id=req.gate_id,
+                name=req.name,
+                description=req.description,
+            )
+            return evaluation_lab_model_to_plain(baseline)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/baselines/compare")
+    def evaluation_lab_baseline_compare(
+        req: EvaluationLabBaselineCompareRequest,
+    ) -> dict[str, Any]:
+        try:
+            run = evaluation_lab_runner.read_run(req.run_id)
+            baseline = quality_gate_runner.baseline_store.get_baseline(req.baseline_id)
+            regressions, improvements = (
+                quality_gate_runner.baseline_store.compare_result_to_baseline(run, baseline)
+            )
+            return {
+                "baseline_id": baseline.baseline_id,
+                "run_id": run.run_id,
+                "regressions": evaluation_lab_model_to_plain(regressions),
+                "improvements": evaluation_lab_model_to_plain(improvements),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/evaluation-lab/coverage")
+    def evaluation_lab_coverage() -> dict[str, Any]:
+        try:
+            return evaluation_lab_model_to_plain(
+                coverage_for_cases_root(settings.evaluation_lab_cases_dir)
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/evaluation-lab/warnings/audit")
+    def evaluation_lab_warnings_audit(req: EvaluationLabWarningAuditRequest) -> dict[str, Any]:
+        warnings = list(req.warnings)
+        if req.warning_text:
+            warnings.extend(req.warning_text.splitlines())
+        return evaluation_lab_model_to_plain(
+            summarize_warnings(
+                warnings,
+                max_serious_warnings=settings.evaluation_lab_max_serious_warnings,
+            )
+        )
 
     @app.get("/memory/search")
     def memory_search(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=100)):

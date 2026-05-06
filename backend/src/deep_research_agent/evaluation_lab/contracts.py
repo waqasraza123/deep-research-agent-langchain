@@ -330,3 +330,224 @@ class ScoreReport(LabModel):
     dimensions: list[ScoringDimension] = Field(default_factory=list)
     failure_reasons: list[str] = Field(default_factory=list)
     suggested_fixes: list[str] = Field(default_factory=list)
+
+
+class QualityGateStatus(str, Enum):
+    passed = "passed"
+    failed = "failed"
+    warning = "warning"
+    skipped = "skipped"
+    errored = "errored"
+
+
+class RegressionFindingType(str, Enum):
+    newly_failed_case = "newly_failed_case"
+    score_drop = "score_drop"
+    threshold_failure = "threshold_failure"
+    newly_missed_trap = "newly_missed_trap"
+    new_critical_warning = "new_critical_warning"
+    new_artifact_failure = "new_artifact_failure"
+    new_prompt_injection_failure = "new_prompt_injection_failure"
+    new_numeric_failure = "new_numeric_failure"
+    new_temporal_failure = "new_temporal_failure"
+    new_citation_failure = "new_citation_failure"
+    warning_growth = "warning_growth"
+    output_forbidden_phrase_added = "output_forbidden_phrase_added"
+    required_phrase_removed = "required_phrase_removed"
+
+
+class QualityGateProfile(LabModel):
+    gate_id: str
+    name: str
+    description: str = ""
+    enabled: bool = True
+    categories: list[BenchmarkCategory] = Field(default_factory=list)
+    case_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    excluded_case_ids: list[str] = Field(default_factory=list)
+    scoring_profile_id: str = "default"
+    minimum_average_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    minimum_case_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    minimum_pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_failed_cases: int | None = Field(default=None, ge=0)
+    max_critical_failures: int | None = Field(default=None, ge=0)
+    max_high_severity_failures: int | None = Field(default=None, ge=0)
+    max_missed_critical_traps: int | None = Field(default=None, ge=0)
+    max_new_regressions: int | None = Field(default=None, ge=0)
+    max_warning_count: int | None = Field(default=None, ge=0)
+    max_warning_growth_ratio: float | None = Field(default=None, ge=0.0)
+    max_serious_warnings: int | None = Field(default=None, ge=0)
+    require_no_prompt_injection_failures: bool = False
+    require_no_path_safety_failures: bool = False
+    require_no_artifact_integrity_failures: bool = False
+    require_no_numeric_regressions: bool = False
+    require_no_temporal_regressions: bool = False
+    require_no_citation_regressions: bool = False
+    allow_mock_agent: bool = True
+    use_offline_fetcher: bool = True
+    compare_against_baseline: bool = False
+    baseline_id: str | None = None
+    fail_on_missing_baseline: bool = False
+    fail_on_invalid_cases: bool = True
+    fail_on_flaky_cases: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class QualityGateRunRequest(LabModel):
+    gate_id: str = "smoke"
+    case_ids: list[str] = Field(default_factory=list)
+    categories: list[BenchmarkCategory] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    run_all: bool = False
+    baseline_id: str | None = None
+    compare_against_baseline: bool | None = None
+    dry_run: bool = False
+    use_mock_agent: bool | None = None
+    use_offline_fetcher: bool | None = None
+    settings_overrides: dict[str, Any] = Field(default_factory=dict)
+    output_dir: str | None = None
+    update_baseline: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class QualityGateThresholdResult(LabModel):
+    threshold_id: str
+    name: str
+    passed: bool
+    expected: Any = None
+    actual: Any = None
+    severity: CheckSeverity = CheckSeverity.high
+    message: str = ""
+    affected_cases: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+
+
+class BaselineCaseSnapshot(LabModel):
+    case_id: str
+    status: str
+    passed: bool
+    score: float = Field(ge=0.0, le=1.0)
+    check_results_summary: dict[str, int] = Field(default_factory=dict)
+    missed_traps: list[str] = Field(default_factory=list)
+    detected_traps: list[str] = Field(default_factory=list)
+    warning_count: int = 0
+    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    report_fingerprint: str = ""
+
+
+class BenchmarkBaseline(LabModel):
+    baseline_id: str
+    name: str
+    description: str = ""
+    created_at: str = Field(default_factory=now_iso_utc)
+    created_from_run_id: str
+    gate_id: str | None = None
+    git_commit: str | None = None
+    case_results: list[BaselineCaseSnapshot] = Field(default_factory=list)
+    suite_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    average_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    case_scores: dict[str, float] = Field(default_factory=dict)
+    check_fingerprints: dict[str, str] = Field(default_factory=dict)
+    warning_fingerprint: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RegressionFinding(LabModel):
+    finding_id: str
+    case_id: str = ""
+    category: str = "regression"
+    severity: CheckSeverity = CheckSeverity.high
+    type: RegressionFindingType
+    message: str
+    baseline_value: Any = None
+    current_value: Any = None
+    score_delta: float = 0.0
+    affected_checks: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+
+
+class ImprovementFinding(LabModel):
+    finding_id: str
+    case_id: str = ""
+    type: str
+    message: str
+    baseline_value: Any = None
+    current_value: Any = None
+    score_delta: float = 0.0
+    affected_checks: list[str] = Field(default_factory=list)
+
+
+class FlakyCaseSignal(LabModel):
+    case_id: str
+    signal_type: str
+    severity: CheckSeverity = CheckSeverity.info
+    message: str
+    recent_statuses: list[str] = Field(default_factory=list)
+    recent_scores: list[float] = Field(default_factory=list)
+    recommendation: str = ""
+
+
+class WarningAudit(LabModel):
+    total_warnings: int = 0
+    warnings_by_category: dict[str, int] = Field(default_factory=dict)
+    warnings_by_file: dict[str, int] = Field(default_factory=dict)
+    warnings_by_origin: dict[str, int] = Field(default_factory=dict)
+    new_warning_count: int = 0
+    repeated_warning_count: int = 0
+    ignored_warning_count: int = 0
+    serious_warning_count: int = 0
+    budget_exceeded: bool = False
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class BenchmarkCoverageSummary(LabModel):
+    total_cases: int = 0
+    categories_covered: list[str] = Field(default_factory=list)
+    categories_missing: list[str] = Field(default_factory=list)
+    trap_types_covered: list[str] = Field(default_factory=list)
+    trap_types_missing: list[str] = Field(default_factory=list)
+    check_types_covered: list[str] = Field(default_factory=list)
+    check_types_missing: list[str] = Field(default_factory=list)
+    difficulty_distribution: dict[str, int] = Field(default_factory=dict)
+    source_type_distribution: dict[str, int] = Field(default_factory=dict)
+    coverage_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class GateTriageSummary(LabModel):
+    highest_priority_failures: list[str] = Field(default_factory=list)
+    likely_root_causes: list[str] = Field(default_factory=list)
+    suggested_engineering_tasks: list[str] = Field(default_factory=list)
+    cases_to_inspect_first: list[str] = Field(default_factory=list)
+    quick_wins: list[str] = Field(default_factory=list)
+    risky_regressions: list[str] = Field(default_factory=list)
+
+
+class QualityGateRunResult(LabModel):
+    gate_run_id: str
+    gate_id: str
+    status: QualityGateStatus
+    started_at: str
+    completed_at: str | None = None
+    benchmark_run_id: str = ""
+    baseline_id: str | None = None
+    total_cases: int = 0
+    passed_cases: int = 0
+    failed_cases: int = 0
+    errored_cases: int = 0
+    skipped_cases: int = 0
+    pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    average_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    minimum_case_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    failed_thresholds: list[QualityGateThresholdResult] = Field(default_factory=list)
+    passed_thresholds: list[QualityGateThresholdResult] = Field(default_factory=list)
+    regressions: list[RegressionFinding] = Field(default_factory=list)
+    improvements: list[ImprovementFinding] = Field(default_factory=list)
+    flaky_cases: list[FlakyCaseSignal] = Field(default_factory=list)
+    warning_audit: WarningAudit = Field(default_factory=WarningAudit)
+    coverage_summary: BenchmarkCoverageSummary = Field(default_factory=BenchmarkCoverageSummary)
+    triage_summary: GateTriageSummary = Field(default_factory=GateTriageSummary)
+    report_artifacts: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
