@@ -22,6 +22,8 @@ ignore = []
 [tool.ruff.lint.per-file-ignores]
 "src/deep_research_agent/protocols/**/*.py" = ["E501"]
 "src/deep_research_agent/verification/**/*.py" = ["E501"]
+"src/deep_research_agent/intelligence_kernel/**/*.py" = ["E501"]
+"tests/test_intelligence_kernel.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

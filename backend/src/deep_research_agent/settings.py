@@ -130,6 +130,24 @@ class Settings:
     allow_mock_fallback: bool = False
     review_gate_default: bool = False
     evidence_citation_threshold: float = 0.34
+    intelligence_kernel_enabled: bool = True
+    intelligence_offline_mode: bool = True
+    intelligence_mock_model_allowed: bool = True
+    intelligence_source_reasoning_enabled: bool = True
+    intelligence_critique_enabled: bool = True
+    intelligence_verification_enabled: bool = True
+    intelligence_confidence_enabled: bool = True
+    intelligence_strict_citation_mode: bool = False
+    intelligence_max_reasoning_passes: int = 8
+    intelligence_max_source_units: int = 100
+    intelligence_max_evidence_units: int = 500
+    intelligence_max_claims: int = 200
+    intelligence_max_claims_to_verify: int = 50
+    intelligence_max_artifact_bytes: int = 5_000_000
+    intelligence_fail_on_critical_warnings: bool = False
+    intelligence_sensitive_domain_review_required: bool = True
+    intelligence_produce_markdown_artifacts: bool = True
+    intelligence_produce_json_artifacts: bool = True
 
     budget_max_model_calls: int = 25
     budget_max_source_fetches: int = 3
@@ -188,14 +206,12 @@ class Settings:
         return Settings(
             model_provider=model_provider,
             temperature=_env_float("TEMPERATURE", 0.2),
-
             ollama_model=_env_str("OLLAMA_MODEL", "llama3.1"),
             ollama_base_url=_env_str("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_num_predict=_clamp_int(_env_int("OLLAMA_NUM_PREDICT", 220), 50, 800),
             ollama_max_context_tokens=_clamp_int(
                 _env_int("OLLAMA_MAX_CONTEXT_TOKENS", 8192), 1024, 262144
             ),
-
             openai_base_url=openai_base_url,
             openai_api_key=openai_api_key,
             openai_model=openai_model,
@@ -208,7 +224,6 @@ class Settings:
             llamacpp_max_context_tokens=_clamp_int(
                 _env_int("LLAMACPP_MAX_CONTEXT_TOKENS", 8192), 1024, 262144
             ),
-
             runs_dir=runs_dir,
             memory_data_dir=Path(memory_data_dir_raw)
             if memory_data_dir_raw
@@ -218,9 +233,7 @@ class Settings:
             in ("1", "true", "yes"),
             source_audit_enabled=_env_str("SOURCE_AUDIT_ENABLED", "true").lower()
             in ("1", "true", "yes"),
-            protocol_selection_enabled=_env_str(
-                "PROTOCOL_SELECTION_ENABLED", "true"
-            ).lower()
+            protocol_selection_enabled=_env_str("PROTOCOL_SELECTION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             intelligence_profile=_env_str("INTELLIGENCE_PROFILE", "balanced_research"),
             source_discovery_enabled=_env_str("SOURCE_DISCOVERY_ENABLED", "false").lower()
@@ -235,9 +248,7 @@ class Settings:
                 "SOURCE_DISCOVERY_ALLOW_SECONDARY_SOURCES", "true"
             ).lower()
             in ("1", "true", "yes"),
-            source_discovery_allow_forums=_env_str(
-                "SOURCE_DISCOVERY_ALLOW_FORUMS", "false"
-            ).lower()
+            source_discovery_allow_forums=_env_str("SOURCE_DISCOVERY_ALLOW_FORUMS", "false").lower()
             in ("1", "true", "yes"),
             source_discovery_require_primary=_env_str(
                 "SOURCE_DISCOVERY_REQUIRE_PRIMARY", "true"
@@ -254,31 +265,25 @@ class Settings:
             ),
             max_discovery_queries=max_discovery_queries,
             max_selected_discovered_sources=max_selected_discovered_sources,
-            document_intelligence_enabled=_env_str(
-                "DOCUMENT_INTELLIGENCE_ENABLED", "true"
-            ).lower()
+            document_intelligence_enabled=_env_str("DOCUMENT_INTELLIGENCE_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             chunk_max_chars=_clamp_int(_env_int("CHUNK_MAX_CHARS", 3200), 400, 20_000),
             chunk_overlap_chars=_clamp_int(_env_int("CHUNK_OVERLAP_CHARS", 300), 0, 5000),
-            retrieval_enabled=_env_str("RETRIEVAL_ENABLED", "true").lower()
-            in ("1", "true", "yes"),
+            retrieval_enabled=_env_str("RETRIEVAL_ENABLED", "true").lower() in ("1", "true", "yes"),
             embedding_provider=_env_str("EMBEDDING_PROVIDER", "disabled").lower(),
             context_pack_max_chars=_clamp_int(
                 _env_int("CONTEXT_PACK_MAX_CHARS", 11000), 1000, 80_000
             ),
             orchestration_enabled=_env_str("ORCHESTRATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
-            synthesis_enabled=_env_str("SYNTHESIS_ENABLED", "true").lower()
-            in ("1", "true", "yes"),
+            synthesis_enabled=_env_str("SYNTHESIS_ENABLED", "true").lower() in ("1", "true", "yes"),
             evaluation_enabled=_env_str("EVALUATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             verification_enabled=_env_str("VERIFICATION_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             hypothesis_engine_enabled=_env_str("HYPOTHESIS_ENGINE_ENABLED", "true").lower()
             in ("1", "true", "yes"),
-            temporal_intelligence_enabled=_env_str(
-                "TEMPORAL_INTELLIGENCE_ENABLED", "true"
-            ).lower()
+            temporal_intelligence_enabled=_env_str("TEMPORAL_INTELLIGENCE_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             source_safety_enabled=_env_str("SOURCE_SAFETY_ENABLED", "true").lower()
             in ("1", "true", "yes"),
@@ -290,9 +295,7 @@ class Settings:
             in ("1", "true", "yes"),
             verification_gate_enabled=_env_str("VERIFICATION_GATE_ENABLED", "false").lower()
             in ("1", "true", "yes"),
-            max_verification_tasks=_clamp_int(
-                _env_int("MAX_VERIFICATION_TASKS", 12), 0, 100
-            ),
+            max_verification_tasks=_clamp_int(_env_int("MAX_VERIFICATION_TASKS", 12), 0, 100),
             high_risk_source_policy=_env_str(
                 "HIGH_RISK_SOURCE_POLICY", "quote_high_exclude_critical"
             ),
@@ -307,21 +310,15 @@ class Settings:
                 "QUANTITATIVE_EXTRACTION_ENABLED", "true"
             ).lower()
             in ("1", "true", "yes"),
-            provenance_manifest_enabled=_env_str(
-                "PROVENANCE_MANIFEST_ENABLED", "true"
-            ).lower()
+            provenance_manifest_enabled=_env_str("PROVENANCE_MANIFEST_ENABLED", "true").lower()
             in ("1", "true", "yes"),
             replay_plan_enabled=_env_str("REPLAY_PLAN_ENABLED", "true").lower()
             in ("1", "true", "yes"),
-            confidence_threshold_for_review=_env_float(
-                "CONFIDENCE_THRESHOLD_FOR_REVIEW", 0.55
-            ),
+            confidence_threshold_for_review=_env_float("CONFIDENCE_THRESHOLD_FOR_REVIEW", 0.55),
             benchmark_path=Path(benchmark_path_raw)
             if benchmark_path_raw
             else REPO_ROOT / "benchmarks",
-            memory_stale_after_days=_clamp_int(
-                _env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650
-            ),
+            memory_stale_after_days=_clamp_int(_env_int("MEMORY_STALE_AFTER_DAYS", 30), 1, 3650),
             max_memory_results=_clamp_int(_env_int("MAX_MEMORY_RESULTS", 20), 1, 500),
             source_scoring_threshold=_env_float("SOURCE_SCORING_THRESHOLD", 0.45),
             evaluation_threshold=_env_float("EVALUATION_THRESHOLD", 0.65),
@@ -335,16 +332,74 @@ class Settings:
             default_max_links_per_source=_clamp_int(
                 _env_int("DEFAULT_MAX_LINKS_PER_SOURCE", 0), 0, 10
             ),
-
             host=_env_str("HOST", "127.0.0.1"),
             port=_env_int("PORT", 8000),
-
             mock_model_name=_env_str("MOCK_MODEL_NAME", "deterministic-mock-research-model"),
             allow_mock_fallback=_env_str("ALLOW_MOCK_FALLBACK", "false").lower()
             in ("1", "true", "yes"),
             review_gate_default=_env_str("REVIEW_GATE_DEFAULT", "false").lower()
             in ("1", "true", "yes"),
             evidence_citation_threshold=_env_float("EVIDENCE_CITATION_THRESHOLD", 0.34),
+            intelligence_kernel_enabled=_env_str("INTELLIGENCE_KERNEL_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            intelligence_offline_mode=_env_str("INTELLIGENCE_OFFLINE_MODE", "true").lower()
+            in ("1", "true", "yes"),
+            intelligence_mock_model_allowed=_env_str(
+                "INTELLIGENCE_MOCK_MODEL_ALLOWED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_source_reasoning_enabled=_env_str(
+                "INTELLIGENCE_SOURCE_REASONING_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_critique_enabled=_env_str("INTELLIGENCE_CRITIQUE_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            intelligence_verification_enabled=_env_str(
+                "INTELLIGENCE_VERIFICATION_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_confidence_enabled=_env_str(
+                "INTELLIGENCE_CONFIDENCE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_strict_citation_mode=_env_str(
+                "INTELLIGENCE_STRICT_CITATION_MODE", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_max_reasoning_passes=_clamp_int(
+                _env_int("INTELLIGENCE_MAX_REASONING_PASSES", 8), 1, 50
+            ),
+            intelligence_max_source_units=_clamp_int(
+                _env_int("INTELLIGENCE_MAX_SOURCE_UNITS", 100), 1, 1000
+            ),
+            intelligence_max_evidence_units=_clamp_int(
+                _env_int("INTELLIGENCE_MAX_EVIDENCE_UNITS", 500), 1, 5000
+            ),
+            intelligence_max_claims=_clamp_int(_env_int("INTELLIGENCE_MAX_CLAIMS", 200), 1, 2000),
+            intelligence_max_claims_to_verify=_clamp_int(
+                _env_int("INTELLIGENCE_MAX_CLAIMS_TO_VERIFY", 50), 0, 500
+            ),
+            intelligence_max_artifact_bytes=_clamp_int(
+                _env_int("INTELLIGENCE_MAX_ARTIFACT_BYTES", 5_000_000),
+                1_000,
+                500_000_000,
+            ),
+            intelligence_fail_on_critical_warnings=_env_str(
+                "INTELLIGENCE_FAIL_ON_CRITICAL_WARNINGS", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_sensitive_domain_review_required=_env_str(
+                "INTELLIGENCE_SENSITIVE_DOMAIN_REVIEW_REQUIRED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_produce_markdown_artifacts=_env_str(
+                "INTELLIGENCE_PRODUCE_MARKDOWN_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            intelligence_produce_json_artifacts=_env_str(
+                "INTELLIGENCE_PRODUCE_JSON_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
             budget_max_model_calls=_clamp_int(_env_int("BUDGET_MAX_MODEL_CALLS", 25), 0, 1000),
             budget_max_source_fetches=_clamp_int(_env_int("BUDGET_MAX_SOURCE_FETCHES", 3), 0, 1000),
             budget_max_generated_chars=_clamp_int(

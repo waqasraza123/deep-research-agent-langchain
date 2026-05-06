@@ -181,6 +181,90 @@ Advanced summary endpoint:
 See `docs/advanced-intelligence-pipeline.md` for the integrated backend-only lifecycle,
 source-safety isolation behavior, confidence penalties, provenance/replay metadata, and limitations.
 
+Research Intelligence Kernel endpoints:
+
+- `POST /intelligence/analyze`
+- `POST /runs/{thread_id}/intelligence/rebuild`
+- `GET /runs/{thread_id}/intelligence`
+- `GET /runs/{thread_id}/blueprint`
+- `GET /runs/{thread_id}/critique`
+- `GET /runs/{thread_id}/verification`
+- `GET /runs/{thread_id}/confidence`
+- `GET /runs/{thread_id}/readiness`
+
+The rebuild endpoint uses existing run artifacts only. It does not refetch sources, perform live
+search, call OpenAI, call Ollama, or rerun the agent.
+
+## Research Intelligence Kernel
+
+The backend includes a deterministic, backend-only Research Intelligence Kernel under
+`deep_research_agent.intelligence_kernel`. It runs after `/run` creates or backfills the guaranteed
+artifacts and can also be rebuilt for an existing `runs/<thread_id>/` folder. The kernel is an audit
+and quality layer around source content and generated artifacts; it is not a replacement for the
+agent, for live source discovery, or for human review.
+
+The kernel does the following:
+
+- analyzes the request intent and complexity using offline rules
+- creates a typed execution blueprint with source, evidence, verification, citation, freshness,
+  safety, and synthesis policies
+- normalizes `sources.json` into governed source units with URL normalization, trust, role,
+  duplicate, weak-extraction, and prompt-injection warnings
+- extracts deterministic evidence units from source text and existing markdown artifacts
+- extracts claims from `report.md` and `notes.md`
+- critiques unsupported, stale, numeric, one-sided, sensitive-domain, and weak-artifact risks
+- generates and runs local verification tasks against existing evidence only
+- calibrates confidence for claims and the whole report
+- writes an artifact registry and operator-facing readiness summary
+
+The main kernel artifacts are:
+
+- `kernel_blueprint.json` / `.md`
+- `kernel_passes.json` / `.md`
+- `source_inventory.json` / `.md`
+- `source_units.json` / `.md`
+- `evidence_units.json` / `.md`
+- `evidence_coverage.json` / `.md`
+- `claims.json` / `.md`
+- `critique_findings.json` / `.md`
+- `operator_warnings.json` / `.md`
+- `verification_tasks.json` / `.md`
+- `verification_results.json` / `.md`
+- `confidence_calibration.json` / `.md`
+- `kernel_artifact_registry.json` / `.md`
+- `kernel_summary.json` / `.md`
+- `research_readiness.md`
+
+`research_readiness.md` is the fastest operator artifact to read. It answers whether the report is
+usable, the final confidence, the biggest risks, manual checks required, weak claims, strongest
+sources, sources not to trust blindly, and next actions.
+
+Kernel settings default to offline-safe behavior:
+
+```bash
+INTELLIGENCE_KERNEL_ENABLED=true
+INTELLIGENCE_OFFLINE_MODE=true
+INTELLIGENCE_MAX_SOURCE_UNITS=100
+INTELLIGENCE_MAX_EVIDENCE_UNITS=500
+INTELLIGENCE_MAX_CLAIMS=200
+INTELLIGENCE_MAX_CLAIMS_TO_VERIFY=50
+INTELLIGENCE_FAIL_ON_CRITICAL_WARNINGS=false
+INTELLIGENCE_SENSITIVE_DOMAIN_REVIEW_REQUIRED=true
+```
+
+Run offline kernel tests with:
+
+```bash
+cd backend
+.venv/bin/python -m pytest tests/test_intelligence_kernel.py -q
+```
+
+Known limitations: deterministic verification can find overlap, missing support, numeric/date
+mismatches, weak source coverage, and sensitive-domain risk, but it does not prove claims true. It
+uses local artifacts as evidence and is deliberately conservative when sources are missing,
+undated, weak, or not primary. Medical, legal, and financial outputs remain informational and
+require qualified human review.
+
 ## Temporal Intelligence
 
 The backend includes an offline-only temporal subsystem under

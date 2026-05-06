@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .advanced_summary import (
@@ -49,6 +49,23 @@ from .hypotheses import (
     model_to_plain as hypothesis_model_to_plain,
 )
 from .intelligence import ResearchStrategy, create_research_strategy
+from .intelligence_kernel import (
+    IntelligenceAnalyzeRequest,
+    rebuild_intelligence_kernel,
+)
+from .intelligence_kernel import (
+    analyze_request as analyze_kernel_request,
+)
+from .intelligence_kernel import (
+    generate_blueprint as generate_kernel_blueprint,
+)
+from .intelligence_kernel import (
+    model_to_plain as kernel_model_to_plain,
+)
+from .intelligence_kernel import (
+    settings_from_runtime as kernel_settings_from_runtime,
+)
+from .intelligence_kernel.kernel import build_kernel_input, read_kernel_summary
 from .intelligence_pipeline_summary import (
     build_intelligence_pipeline_summary,
     write_intelligence_pipeline_summary,
@@ -726,9 +743,7 @@ def _ensure_report_with_model(
     m = usable[0]
     safety = m.get("source_safety") if isinstance(m.get("source_safety"), dict) else {}
     context_path = (
-        safety.get("sanitized_local_path")
-        or m.get("sanitized_local_path")
-        or m["local_path"]
+        safety.get("sanitized_local_path") or m.get("sanitized_local_path") or m["local_path"]
     )
     rel = _safe_local_rel(str(context_path))
     if not rel:
@@ -1106,6 +1121,55 @@ def _write_pipeline_summary(
             run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
 
 
+def _try_rebuild_kernel(
+    *,
+    settings: Settings,
+    td,
+    thread_id: str,
+    question: str,
+    urls: list[str],
+    warnings: list[str],
+    run_context: RunContext | None = None,
+) -> None:
+    if not settings.intelligence_kernel_enabled:
+        return
+    try:
+        result = rebuild_intelligence_kernel(
+            runs_dir=settings.runs_dir,
+            thread_id=thread_id,
+            question=question,
+            urls=urls,
+            runtime_settings=settings,
+        )
+    except Exception as e:
+        log.exception("research intelligence kernel rebuild failed")
+        warnings.append(
+            f"Research intelligence kernel artifacts were not generated: {type(e).__name__}: {e}"
+        )
+        try:
+            (td / "kernel_error.json").write_text(
+                json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            log.exception("kernel error artifact write failed")
+        return
+    warnings.extend(w.message for w in result.warnings if w.severity in {"high", "critical"})
+    if run_context:
+        for rel_path in result.artifacts:
+            path = td / rel_path
+            run_context.artifact_written(rel_path, path.stat().st_size if path.exists() else None)
+        run_context.log(
+            "artifact_written",
+            message="research_intelligence_kernel",
+            metadata={
+                "intent": result.blueprint.intent.label,
+                "final_confidence": result.summary.final_confidence.confidence_after,
+                "warnings": len(result.warnings),
+            },
+        )
+
+
 def _write_audit_for_sources(
     *,
     thread_dir,
@@ -1190,9 +1254,7 @@ def _try_write_advanced_summary(
         written = write_advanced_intelligence_summary(td, summary)
     except Exception as e:
         log.exception("advanced intelligence summary rebuild failed")
-        warnings.append(
-            f"Advanced intelligence summary was not generated: {type(e).__name__}: {e}"
-        )
+        warnings.append(f"Advanced intelligence summary was not generated: {type(e).__name__}: {e}")
         return
     for warning in summary.warnings:
         if warning.severity in {"high", "critical"} and warning.message not in warnings:
@@ -1467,6 +1529,37 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     @app.get("/runtime/diagnostics")
     def diagnostics() -> dict[str, Any]:
         return build_runtime_diagnostics(settings).dict()
+
+    @app.post("/intelligence/analyze")
+    def intelligence_analyze(req: IntelligenceAnalyzeRequest) -> dict[str, Any]:
+        thread_id = (
+            req.thread_id
+            or "analysis-"
+            + hashlib.sha1((req.question + "|" + "|".join(req.urls)).encode("utf-8")).hexdigest()[
+                :12
+            ]
+        )
+        kernel_settings = req.settings or kernel_settings_from_runtime(settings)
+        kernel_input = build_kernel_input(
+            thread_id=thread_id,
+            question=req.question.strip(),
+            urls=req.urls,
+            settings=settings,
+        )
+        intent, complexity, warnings = analyze_kernel_request(req.question.strip(), req.urls)
+        blueprint = generate_kernel_blueprint(
+            kernel_input,
+            intent,
+            complexity,
+            kernel_settings,
+            warnings,
+        )
+        return {
+            "intent": kernel_model_to_plain(intent),
+            "complexity": kernel_model_to_plain(complexity),
+            "blueprint": kernel_model_to_plain(blueprint),
+            "warnings": kernel_model_to_plain(warnings),
+        }
 
     @app.post("/run")
     def run(req: RunRequest) -> dict[str, Any]:
@@ -1936,6 +2029,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     warnings=warnings,
                     run_context=run_context,
                 )
+                _try_rebuild_kernel(
+                    settings=effective_settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    urls=fetch_urls,
+                    warnings=warnings,
+                    run_context=run_context,
+                )
                 mock_summary = _summary_with_advanced_intelligence(
                     td,
                     "[MOCK OUTPUT] Deterministic offline run completed.",
@@ -2057,8 +2159,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
             user_msg = req.question.strip()
             user_msg += (
-                "\n\nUntrusted source handling policy:\n"
-                + source_trust_boundary_instructions()
+                "\n\nUntrusted source handling policy:\n" + source_trust_boundary_instructions()
             )
             user_msg += (
                 "\n\nProtocol requirements:\n" + protocol_selection.instruction_block.strip()
@@ -2320,6 +2421,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
                     warnings=fallback_warnings,
                     run_context=run_context,
                 )
+                _try_rebuild_kernel(
+                    settings=settings,
+                    td=td,
+                    thread_id=thread_id,
+                    question=req.question.strip(),
+                    urls=locals().get("fetch_urls", urls),
+                    warnings=fallback_warnings,
+                    run_context=run_context,
+                )
                 run_repository.set_warnings(thread_id, fallback_warnings)
                 _refresh_provenance_for_run(thread_id)
                 _try_write_advanced_summary(
@@ -2355,6 +2465,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             run_repository.record_error(thread_id, e, fail_run=True)
             warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
             warnings.extend(pre_agent_warnings)
+            _try_rebuild_kernel(
+                settings=settings,
+                td=td,
+                thread_id=thread_id,
+                question=req.question.strip(),
+                urls=locals().get("fetch_urls", urls),
+                warnings=warnings,
+                run_context=run_context,
+            )
             for artifact in list_artifacts(settings.runs_dir, thread_id):
                 run_context.artifact_written(artifact.path, artifact.size_bytes)
             run_context.log("run_failed", message=f"{type(e).__name__}: {e}")
@@ -2488,6 +2607,15 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             warnings=warnings,
             run_context=run_context,
         )
+        _try_rebuild_kernel(
+            settings=settings,
+            td=td,
+            thread_id=thread_id,
+            question=req.question.strip(),
+            urls=locals().get("fetch_urls", urls),
+            warnings=warnings,
+            run_context=run_context,
+        )
         run_repository.set_warnings(thread_id, warnings)
         _refresh_provenance_for_run(thread_id)
         _try_write_advanced_summary(
@@ -2518,6 +2646,90 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "protocol": protocol_model_to_plain(protocol_selection),
             "run": run_summary(run_repository.get(thread_id)),
         }
+
+    @app.post("/runs/{thread_id}/intelligence/rebuild")
+    def intelligence_rebuild(thread_id: str) -> dict[str, Any]:
+        try:
+            ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        run_snapshot = run_repository.get_or_none(thread_id)
+        question = (
+            run_snapshot.question
+            if run_snapshot is not None
+            else "Rebuild research intelligence from existing artifacts"
+        )
+        urls = run_snapshot.urls if run_snapshot is not None else []
+        warnings = ensure_required_artifacts(settings.runs_dir, thread_id)
+        try:
+            result = rebuild_intelligence_kernel(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                question=question,
+                urls=urls,
+                runtime_settings=settings,
+                raw_request_metadata={"mode": "rebuild"},
+            )
+        except Exception as e:
+            log.exception("research intelligence kernel rebuild failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        all_warnings = warnings + [w.message for w in result.warnings]
+        if run_snapshot is not None:
+            run_repository.set_warnings(thread_id, all_warnings)
+            _refresh_provenance_for_run(thread_id)
+            run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "warnings": all_warnings,
+            "summary": kernel_model_to_plain(result.summary),
+            "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
+        }
+
+    @app.get("/runs/{thread_id}/intelligence")
+    def intelligence_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return read_kernel_summary(td)
+
+    @app.get("/runs/{thread_id}/blueprint")
+    def intelligence_blueprint_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _read_json_artifact(td, "kernel_blueprint.json")
+
+    @app.get("/runs/{thread_id}/critique")
+    def intelligence_critique_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _read_json_artifact(td, "critique_findings.json")
+
+    @app.get("/runs/{thread_id}/confidence")
+    def intelligence_confidence_get(thread_id: str) -> dict[str, Any]:
+        try:
+            td = ensure_thread_dir(settings.runs_dir, thread_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _read_json_artifact(td, "confidence_calibration.json")
+
+    @app.get("/runs/{thread_id}/readiness")
+    def intelligence_readiness_get(thread_id: str):
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, "research_readiness.md")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            return {
+                "thread_id": thread_id,
+                "status": "missing",
+                "message": "research_readiness.md is missing; rebuild intelligence for this run.",
+            }
+        return PlainTextResponse(path.read_text(encoding="utf-8"))
 
     @app.post("/runs/{thread_id}/evidence/rebuild")
     def evidence_rebuild(thread_id: str) -> dict[str, Any]:
@@ -2679,9 +2891,7 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "thread_id": thread_id,
             "warnings": warnings + batch.summary.warnings,
             "summary": verification_model_to_plain(batch.summary),
-            "confidence_calibration": verification_model_to_plain(
-                batch.confidence_calibration
-            ),
+            "confidence_calibration": verification_model_to_plain(batch.confidence_calibration),
             "artifacts": [a.__dict__ for a in list_artifacts(settings.runs_dir, thread_id)],
         }
 
