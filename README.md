@@ -31,6 +31,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
 - Safety defaults for bounded source fetching, one-hop optional link expansion, URL validation,
   budget tracking, and high-stakes review recommendations.
+- SQLite-backed autonomous runtime control for long-running research jobs: idempotent submission,
+  durable job/stage/event records, local worker leasing, pause/resume/cancel, retry/dead-letter,
+  stale lease recovery, diagnostics, and runtime artifacts. This is backend-only.
 
 ## Local Development
 
@@ -111,6 +114,23 @@ EVALUATION_ENABLED=true
 HIGH_RISK_SOURCE_POLICY=quote_high_exclude_critical
 MAX_HYPOTHESES=12
 MAX_HYPOTHESIS_EVIDENCE_ITEMS=6
+
+# autonomous runtime control
+RUNTIME_CONTROL_ENABLED=true
+RUNTIME_ASYNC_ENABLED=false
+RUNTIME_SQLITE_PATH=
+RUNTIME_LEASE_SECONDS=120
+RUNTIME_HEARTBEAT_SECONDS=30
+RUNTIME_MAX_ATTEMPTS=3
+RUNTIME_MAX_RUNTIME_SECONDS=900
+RUNTIME_MAX_STAGE_SECONDS=300
+RUNTIME_MAX_EVENTS=5000
+RUNTIME_MAX_ARTIFACT_BYTES=50000000
+RUNTIME_ALLOW_FORCE_CANCEL=true
+RUNTIME_RESUME_ENABLED=true
+RUNTIME_DEAD_LETTER_ENABLED=true
+RUNTIME_RUN_POSTPROCESSING=true
+RUNTIME_MOCK_AGENT_EXECUTION_ENABLED=false
 ```
 
 Source discovery is disabled by default and does not perform hidden live search. `mock` and
@@ -141,10 +161,91 @@ Most-used endpoints:
 - `POST /runs/{thread_id}/review/approve`
 - `POST /runs/{thread_id}/review/request-changes`
 - `POST /runs/{thread_id}/review/reject`
+- `POST /runtime/jobs`
+- `GET /runtime/jobs`
+- `GET /runtime/jobs/{job_id}`
+- `POST /runtime/jobs/{job_id}/run`
+- `POST /runtime/worker/process-next`
+- `POST /runtime/jobs/{job_id}/cancel`
+- `POST /runtime/jobs/{job_id}/pause`
+- `POST /runtime/jobs/{job_id}/resume`
+- `GET /runtime/jobs/{job_id}/events`
+- `GET /runtime/jobs/{job_id}/stages`
+- `GET /runtime/jobs/{job_id}/budget`
+- `GET /runtime/jobs/{job_id}/recovery-plan`
+- `POST /runtime/recover-stale`
+- `GET /runtime/dead-letter`
+- `POST /runtime/jobs/{job_id}/restore`
+- `GET /runs/{thread_id}/runtime`
 
 Specialized endpoints also exist for protocols, source discovery, document intelligence,
 retrieval, memory, temporal intelligence, quantitative intelligence, evidence, hypotheses, verification, synthesis,
 evaluation, benchmarks, and quality scores.
+
+## Autonomous Runtime Control
+
+The original `POST /run` path remains synchronous by default. Set `RUNTIME_ASYNC_ENABLED=true` or
+send `"runtime_async": true` to submit through the autonomous runtime instead. The async response
+returns a `job_id`, `thread_id`, current status, current stage, warnings, and artifact links without
+requiring the request lifecycle to stay attached to model execution. For local development you can
+send `"run_now": true` or call `POST /runtime/jobs/{job_id}/run` / `POST /runtime/worker/process-next`
+to process work once in-process.
+
+Runtime jobs are stored in SQLite, defaulting to `runs/runtime.sqlite3`. The repository stores jobs,
+stage records, events, leases, queue entries, control requests, and dead-letter records. Job
+submission computes an idempotency key from the normalized question, URL set, and redacted settings;
+active duplicates return the existing job instead of creating duplicate work.
+
+Runtime execution is stage-level resumable:
+
+- `input_snapshot`
+- `planning`
+- `source_fetching`
+- `source_processing`
+- `agent_execution`
+- `artifact_backfill`
+- `intelligence_postprocessing`
+- `verification`
+- `finalization`
+
+The runtime guarantees the existing deliverables where possible: `plan.md`, `notes.md`,
+`sources.json`, and `report.md`. It also writes runtime artifacts such as
+`runtime_input_snapshot.json`, `runtime_job.json`, `runtime_stages.json`, `runtime_stages.md`,
+`runtime_events.jsonl`, `runtime_events.md`, `runtime_budget.json`, `runtime_budget.md`,
+`runtime_source_fetch_summary.json`, `runtime_source_processing_summary.md`,
+`runtime_postprocessing_summary.md`, `runtime_verification_skipped.md`,
+`runtime_recovery_plan.json`, `runtime_recovery_plan.md`, `runtime_final_summary.json`,
+`runtime_final_summary.md`, `runtime_dead_letter.json`, and `runtime_error.json` when applicable.
+
+Cancellation and pause are cooperative. A queued job can be cancelled or paused immediately. A
+running job transitions to `cancelling` or `pausing` and the worker stops between stages. Force
+cancellation marks runtime state immediately, but it may not interrupt an already-blocking model
+call unless the underlying provider supports cancellation.
+
+Retry uses a typed policy with exponential backoff metadata. Transient timeout/provider-style
+errors are retryable; validation, security/path traversal, and missing configuration-style errors
+are not. Exhausted jobs move to the dead-letter queue when enabled and can be restored with
+`POST /runtime/jobs/{job_id}/restore`.
+
+Stale lease recovery is local and SQLite-backed. `POST /runtime/recover-stale` expires leases that
+missed heartbeat, inspects stage/artifact state, and requeues jobs when stage-level recovery is
+safe. Resume is artifact/stage driven; it is not token-level continuation inside a model call.
+
+Budgets are checked before and after stage execution and persisted to `runtime_budget.json`. The
+runtime tracks elapsed runtime, per-stage time, source counts, model calls where detectable,
+artifact bytes, retry count, event count, source count, and extracted character count. Soft budget
+exceedance records warnings; hard exceedance fails the job when
+`RUNTIME_FAIL_ON_BUDGET_EXCEEDED=true`.
+
+`RUNTIME_MOCK_AGENT_EXECUTION_ENABLED=true` enables deterministic offline runtime worker execution
+for tests and local control-plane validation. It writes the required artifacts and marks output as
+mock-generated. Production-like settings do not silently mock unless explicitly configured or the
+job request asks for mock execution.
+
+Known limits: the SQLite runtime is local/dev/single-node friendly, not a distributed queue
+replacement; cancellation is cooperative; force cancellation does not kill in-flight blocking calls;
+resume is stage-level/artifact-based; runtime mock execution intentionally skips network fetching
+for offline control-plane tests.
 
 Temporal endpoints:
 

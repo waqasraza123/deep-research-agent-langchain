@@ -144,6 +144,15 @@ from .runtime.mock_model import write_mock_research_artifacts
 from .runtime.model_registry import build_model_registry
 from .runtime.retries import retry_sync
 from .runtime.run_context import RunContext
+from .runtime_control.api_models import RuntimeJobControlRequest, RuntimeJobSubmitRequest
+from .runtime_control.cancellation import CancellationService
+from .runtime_control.contracts import ResearchJobStatus, ResearchStage, RuntimeBudget
+from .runtime_control.diagnostics import build_control_diagnostics
+from .runtime_control.pause_resume import PauseResumeService
+from .runtime_control.queue import RuntimeQueue
+from .runtime_control.recovery import ResumeInspector, RuntimeRecoveryService
+from .runtime_control.repository import RuntimeRepository
+from .runtime_control.worker import RuntimeWorker
 from .settings import Settings
 from .source_audit import (
     audit_sources,
@@ -206,6 +215,9 @@ class RunRequest(BaseModel):
     allow_mock_fallback: bool = False
     budget: RunBudget | None = None
     source_discovery: SourceDiscoverySettings | None = None
+    runtime_async: bool | None = None
+    run_now: bool = False
+    idempotency_key: str | None = None
 
 
 class ProtocolSelectRequest(BaseModel):
@@ -1461,6 +1473,8 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     settings = settings or Settings.load()
     service = service or AgentService(settings)
     run_repository = RunRepository(settings.runs_dir)
+    runtime_repository = RuntimeRepository.from_settings(settings)
+    runtime_queue = RuntimeQueue(repository=runtime_repository, runs_dir=settings.runs_dir)
     memory_repository = _memory_repository(settings)
     memory_source_cache = SourceCache(
         memory_repository,
@@ -1471,6 +1485,50 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     protocol_registry = ProtocolRegistry()
 
     app = FastAPI(title="Deep Research Agent")
+
+    def _runtime_budget_from_settings() -> RuntimeBudget:
+        return RuntimeBudget(
+            max_runtime_seconds=settings.runtime_max_runtime_seconds,
+            max_stage_seconds=settings.runtime_max_stage_seconds,
+            max_source_fetches=settings.budget_max_source_fetches,
+            max_model_calls=settings.budget_max_model_calls,
+            max_artifact_bytes=settings.runtime_max_artifact_bytes,
+            max_retries=settings.runtime_max_attempts,
+            max_events=settings.runtime_max_events,
+            fail_on_budget_exceeded=settings.runtime_fail_on_budget_exceeded,
+        )
+
+    def _runtime_budget_from_run_budget(budget: RunBudget | None) -> RuntimeBudget:
+        rt = _runtime_budget_from_settings()
+        if budget is None:
+            return rt
+        return rt.copy(
+            update={
+                "max_runtime_seconds": int(budget.max_runtime_seconds),
+                "max_source_fetches": budget.max_source_fetches,
+                "max_model_calls": budget.max_model_calls,
+                "max_artifact_bytes": budget.max_artifacts_size,
+            }
+        )
+
+    def _job_response(job, *, mode: str, created: bool | None = None) -> dict[str, Any]:
+        artifacts: list[dict[str, Any]] = []
+        try:
+            artifacts = [a.__dict__ for a in list_artifacts(settings.runs_dir, job.thread_id)]
+        except Exception:
+            artifacts = []
+        return {
+            "job_id": job.job_id,
+            "thread_id": job.thread_id,
+            "status": job.status,
+            "stage": job.stage,
+            "runtime_mode": mode,
+            "created": created,
+            "warnings": job.warnings,
+            "artifact_links": [f"/runs/{job.thread_id}/artifacts/{a['path']}" for a in artifacts],
+            "artifacts": artifacts if job.status == ResearchJobStatus.COMPLETED else [],
+            "runtime": job.dict(),
+        }
 
     def _refresh_provenance_for_run(thread_id: str) -> None:
         if not settings.provenance_enabled or not settings.provenance_manifest_enabled:
@@ -1528,7 +1586,179 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.get("/runtime/diagnostics")
     def diagnostics() -> dict[str, Any]:
-        return build_runtime_diagnostics(settings).dict()
+        legacy = build_runtime_diagnostics(settings).dict()
+        control = build_control_diagnostics(
+            repository=runtime_repository,
+            runs_dir=settings.runs_dir,
+            settings=settings,
+        ).dict()
+        return {**legacy, "control": control, **control}
+
+    @app.post("/runtime/jobs")
+    def runtime_submit(req: RuntimeJobSubmitRequest) -> dict[str, Any]:
+        if not settings.runtime_control_enabled:
+            raise HTTPException(status_code=409, detail="Runtime control is disabled")
+        metadata = {
+            "mock_agent_execution": bool(
+                req.mock_agent_execution
+                if req.mock_agent_execution is not None
+                else settings.runtime_mock_agent_execution_enabled
+            )
+        }
+        job, created = runtime_queue.submit_job(
+            question=req.question,
+            urls=req.urls,
+            settings_snapshot={**req.settings, "runtime": True},
+            thread_id=req.thread_id,
+            idempotency_key=req.idempotency_key,
+            priority=req.priority,
+            budget=req.budget or _runtime_budget_from_settings(),
+            max_attempts=req.max_attempts or settings.runtime_max_attempts,
+            resubmit_completed=req.resubmit_completed,
+            metadata=metadata,
+        )
+        if req.run_now:
+            job = RuntimeWorker(
+                settings=settings,
+                repository=runtime_repository,
+                service=service,
+            ).process_job(job.job_id)
+        return _job_response(job, mode="async_runtime", created=created)
+
+    @app.get("/runtime/jobs")
+    def runtime_jobs(
+        status: ResearchJobStatus | None = None,
+        stage: ResearchStage | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        has_errors: bool | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
+        return [
+            job.dict()
+            for job in runtime_repository.list_jobs(
+                status=status,
+                stage=stage,
+                created_after=_normalize_dt(created_after),
+                created_before=_normalize_dt(created_before),
+                has_errors=has_errors,
+                limit=limit,
+                offset=offset,
+            )
+        ]
+
+    @app.get("/runtime/jobs/{job_id}")
+    def runtime_job_get(job_id: str) -> dict[str, Any]:
+        try:
+            return runtime_repository.get_job(job_id).dict()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Runtime job not found") from None
+
+    @app.post("/runtime/jobs/{job_id}/run")
+    def runtime_job_run(job_id: str) -> dict[str, Any]:
+        try:
+            job = RuntimeWorker(
+                settings=settings,
+                repository=runtime_repository,
+                service=service,
+            ).process_job(job_id)
+            return _job_response(job, mode="run_now")
+        except Exception as e:
+            raise HTTPException(status_code=409, detail=f"{type(e).__name__}: {e}") from e
+
+    @app.post("/runtime/worker/process-next")
+    def runtime_process_next() -> dict[str, Any]:
+        job = RuntimeWorker(
+            settings=settings,
+            repository=runtime_repository,
+            service=service,
+        ).process_next_job()
+        if job is None:
+            return {"processed": False}
+        return {"processed": True, **_job_response(job, mode="process_next")}
+
+    @app.post("/runtime/jobs/{job_id}/cancel")
+    def runtime_cancel(job_id: str, req: RuntimeJobControlRequest | None = None) -> dict[str, Any]:
+        request = req or RuntimeJobControlRequest()
+        if request.force and not settings.runtime_allow_force_cancel:
+            raise HTTPException(status_code=409, detail="Force cancellation is disabled")
+        try:
+            job = CancellationService(
+                repository=runtime_repository, runs_dir=settings.runs_dir
+            ).request_cancel(
+                job_id=job_id,
+                requested_by=request.requested_by,
+                reason=request.reason,
+                force=request.force,
+            )
+            return job.dict()
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/runtime/jobs/{job_id}/pause")
+    def runtime_pause(job_id: str, req: RuntimeJobControlRequest | None = None) -> dict[str, Any]:
+        request = req or RuntimeJobControlRequest()
+        try:
+            return PauseResumeService(
+                repository=runtime_repository, runs_dir=settings.runs_dir
+            ).request_pause(
+                job_id=job_id,
+                requested_by=request.requested_by,
+                reason=request.reason,
+            ).dict()
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/runtime/jobs/{job_id}/resume")
+    def runtime_resume(job_id: str, req: RuntimeJobControlRequest | None = None) -> dict[str, Any]:
+        if not settings.runtime_resume_enabled:
+            raise HTTPException(status_code=409, detail="Runtime resume is disabled")
+        request = req or RuntimeJobControlRequest()
+        try:
+            return PauseResumeService(
+                repository=runtime_repository, runs_dir=settings.runs_dir
+            ).request_resume(
+                job_id=job_id,
+                requested_by=request.requested_by,
+                reason=request.reason,
+            ).dict()
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.get("/runtime/jobs/{job_id}/events")
+    def runtime_job_events(job_id: str, since_event_id: str | None = None) -> list[dict[str, Any]]:
+        events = runtime_repository.list_events(job_id, since_event_id=since_event_id)
+        return [event.dict() for event in events]
+
+    @app.get("/runtime/jobs/{job_id}/stages")
+    def runtime_job_stages(job_id: str) -> list[dict[str, Any]]:
+        return [stage.dict() for stage in runtime_repository.get_stage_records(job_id)]
+
+    @app.get("/runtime/jobs/{job_id}/budget")
+    def runtime_job_budget(job_id: str) -> dict[str, Any]:
+        job = runtime_repository.get_job(job_id)
+        return {"budget": job.budget.dict(), "usage": job.budget_usage.dict()}
+
+    @app.get("/runtime/jobs/{job_id}/recovery-plan")
+    def runtime_job_recovery_plan(job_id: str) -> dict[str, Any]:
+        return ResumeInspector(
+            repository=runtime_repository, runs_dir=settings.runs_dir
+        ).inspect_job(job_id).dict()
+
+    @app.post("/runtime/recover-stale")
+    def runtime_recover_stale() -> dict[str, Any]:
+        return RuntimeRecoveryService(
+            repository=runtime_repository, runs_dir=settings.runs_dir
+        ).recover_stale_leases()
+
+    @app.get("/runtime/dead-letter")
+    def runtime_dead_letter() -> list[dict[str, Any]]:
+        return [record.dict() for record in runtime_repository.list_dead_letters()]
+
+    @app.post("/runtime/jobs/{job_id}/restore")
+    def runtime_restore_dead_letter(job_id: str) -> dict[str, Any]:
+        return runtime_repository.restore_dead_letter(job_id).dict()
 
     @app.post("/intelligence/analyze")
     def intelligence_analyze(req: IntelligenceAnalyzeRequest) -> dict[str, Any]:
@@ -1563,6 +1793,46 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.post("/run")
     def run(req: RunRequest) -> dict[str, Any]:
+        runtime_async_requested = (
+            settings.runtime_async_enabled if req.runtime_async is None else req.runtime_async
+        )
+        if runtime_async_requested:
+            source_discovery_snapshot = None
+            if req.source_discovery is not None:
+                source_discovery_snapshot = (
+                    req.source_discovery.model_dump(mode="json")
+                    if hasattr(req.source_discovery, "model_dump")
+                    else req.source_discovery.dict()
+                )
+            job, created = runtime_queue.submit_job(
+                question=req.question,
+                urls=req.urls,
+                settings_snapshot={
+                    "generate_strategy": req.generate_strategy,
+                    "require_review": req.require_review,
+                    "protocol_id": req.protocol_id,
+                    "intelligence_profile_id": req.intelligence_profile_id,
+                    "mock_mode": req.mock_mode,
+                    "source_discovery": source_discovery_snapshot,
+                },
+                thread_id=req.thread_id,
+                idempotency_key=req.idempotency_key,
+                budget=_runtime_budget_from_run_budget(req.budget),
+                max_attempts=settings.runtime_max_attempts,
+                metadata={
+                    "mock_agent_execution": bool(
+                        req.mock_mode or settings.runtime_mock_agent_execution_enabled
+                    )
+                },
+            )
+            if req.run_now:
+                job = RuntimeWorker(
+                    settings=settings,
+                    repository=runtime_repository,
+                    service=service,
+                ).process_job(job.job_id)
+            return _job_response(job, mode="async_runtime", created=created)
+
         thread_id = req.thread_id or str(uuid.uuid4())
         td = ensure_thread_dir(settings.runs_dir, thread_id)
         effective_settings = settings
@@ -3672,6 +3942,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
 
     @app.post("/runs/{thread_id}/cancel")
     def run_cancel(thread_id: str, req: RunCancellationRequest | None = None) -> dict[str, Any]:
+        runtime_job = runtime_repository.get_job_by_thread_id(thread_id)
+        if runtime_job is not None:
+            control = RuntimeJobControlRequest(
+                requested_by=(req.requested_by if req else "operator"),
+                reason=(req.reason if req else ""),
+                force=False,
+            )
+            return runtime_cancel(runtime_job.job_id, control)
         try:
             request = req or RunCancellationRequest()
             run = run_repository.request_cancellation(thread_id, request)
@@ -3743,7 +4021,11 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             td = ensure_thread_dir(settings.runs_dir, thread_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        return read_event_file(td)
+        events = read_event_file(td)
+        runtime_job = runtime_repository.get_job_by_thread_id(thread_id)
+        if runtime_job is not None and not events:
+            return [event.dict() for event in runtime_repository.list_events(runtime_job.job_id)]
+        return events
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:
@@ -3751,10 +4033,23 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             td = ensure_thread_dir(settings.runs_dir, thread_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        runtime_job = runtime_repository.get_job_by_thread_id(thread_id)
+        if runtime_job is not None:
+            return {
+                "budget": runtime_job.budget.dict(),
+                "usage": runtime_job.budget_usage.dict(),
+            }
         data = read_budget_file(td / "budget.json")
         if not data:
             raise HTTPException(status_code=404, detail="Budget not found")
         return data
+
+    @app.get("/runs/{thread_id}/runtime")
+    def run_runtime(thread_id: str) -> dict[str, Any]:
+        job = runtime_repository.get_job_by_thread_id(thread_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Runtime job not found")
+        return job.dict()
 
     @app.get("/runs/{thread_id}/task-graph")
     def run_task_graph(thread_id: str) -> dict[str, Any]:

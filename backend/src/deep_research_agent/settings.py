@@ -156,6 +156,27 @@ class Settings:
     budget_max_artifacts_size: int = 5_000_000
     budget_max_crawl_expansion: int = 10
 
+    runtime_control_enabled: bool = True
+    runtime_async_enabled: bool = False
+    runtime_sqlite_path: Path | None = None
+    runtime_worker_poll_interval_seconds: float = 1.0
+    runtime_lease_seconds: int = 120
+    runtime_heartbeat_seconds: int = 30
+    runtime_max_attempts: int = 3
+    runtime_retry_backoff_initial_seconds: float = 2.0
+    runtime_retry_backoff_multiplier: float = 2.0
+    runtime_retry_backoff_max_seconds: float = 60.0
+    runtime_fail_on_budget_exceeded: bool = False
+    runtime_max_runtime_seconds: int = 900
+    runtime_max_stage_seconds: int = 300
+    runtime_max_events: int = 5000
+    runtime_max_artifact_bytes: int = 50_000_000
+    runtime_allow_force_cancel: bool = True
+    runtime_resume_enabled: bool = True
+    runtime_dead_letter_enabled: bool = True
+    runtime_run_postprocessing: bool = True
+    runtime_mock_agent_execution_enabled: bool = False
+
     def default_budget(self):
         from .runtime.contracts import RunBudget
 
@@ -202,6 +223,7 @@ class Settings:
         memory_data_dir_raw = _env_str("MEMORY_DATA_DIR", "")
         benchmark_path_raw = _env_str("BENCHMARK_PATH", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
+        runtime_sqlite_path_raw = _env_str("RUNTIME_SQLITE_PATH", "")
 
         return Settings(
             model_provider=model_provider,
@@ -412,4 +434,54 @@ class Settings:
             budget_max_crawl_expansion=_clamp_int(
                 _env_int("BUDGET_MAX_CRAWL_EXPANSION", 10), 0, 1000
             ),
+            runtime_control_enabled=_env_str("RUNTIME_CONTROL_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            runtime_async_enabled=_env_str("RUNTIME_ASYNC_ENABLED", "false").lower()
+            in ("1", "true", "yes"),
+            runtime_sqlite_path=Path(runtime_sqlite_path_raw)
+            if runtime_sqlite_path_raw
+            else None,
+            runtime_worker_poll_interval_seconds=_env_float(
+                "RUNTIME_WORKER_POLL_INTERVAL_SECONDS", 1.0
+            ),
+            runtime_lease_seconds=_clamp_int(_env_int("RUNTIME_LEASE_SECONDS", 120), 1, 86_400),
+            runtime_heartbeat_seconds=_clamp_int(
+                _env_int("RUNTIME_HEARTBEAT_SECONDS", 30), 1, 86_400
+            ),
+            runtime_max_attempts=_clamp_int(_env_int("RUNTIME_MAX_ATTEMPTS", 3), 1, 20),
+            runtime_retry_backoff_initial_seconds=_env_float(
+                "RUNTIME_RETRY_BACKOFF_INITIAL_SECONDS", 2.0
+            ),
+            runtime_retry_backoff_multiplier=_env_float(
+                "RUNTIME_RETRY_BACKOFF_MULTIPLIER", 2.0
+            ),
+            runtime_retry_backoff_max_seconds=_env_float(
+                "RUNTIME_RETRY_BACKOFF_MAX_SECONDS", 60.0
+            ),
+            runtime_fail_on_budget_exceeded=_env_str(
+                "RUNTIME_FAIL_ON_BUDGET_EXCEEDED", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            runtime_max_runtime_seconds=_clamp_int(
+                _env_int("RUNTIME_MAX_RUNTIME_SECONDS", 900), 0, 86_400
+            ),
+            runtime_max_stage_seconds=_clamp_int(
+                _env_int("RUNTIME_MAX_STAGE_SECONDS", 300), 0, 86_400
+            ),
+            runtime_max_events=_clamp_int(_env_int("RUNTIME_MAX_EVENTS", 5000), 0, 1_000_000),
+            runtime_max_artifact_bytes=_clamp_int(
+                _env_int("RUNTIME_MAX_ARTIFACT_BYTES", 50_000_000), 0, 1_000_000_000
+            ),
+            runtime_allow_force_cancel=_env_str("RUNTIME_ALLOW_FORCE_CANCEL", "true").lower()
+            in ("1", "true", "yes"),
+            runtime_resume_enabled=_env_str("RUNTIME_RESUME_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            runtime_dead_letter_enabled=_env_str("RUNTIME_DEAD_LETTER_ENABLED", "true").lower()
+            in ("1", "true", "yes"),
+            runtime_run_postprocessing=_env_str("RUNTIME_RUN_POSTPROCESSING", "true").lower()
+            in ("1", "true", "yes"),
+            runtime_mock_agent_execution_enabled=_env_str(
+                "RUNTIME_MOCK_AGENT_EXECUTION_ENABLED", "false"
+            ).lower()
+            in ("1", "true", "yes"),
         )
