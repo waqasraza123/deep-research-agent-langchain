@@ -34,6 +34,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - SQLite-backed autonomous runtime control for long-running research jobs: idempotent submission,
   durable job/stage/event records, local worker leasing, pause/resume/cancel, retry/dead-letter,
   stale lease recovery, diagnostics, and runtime artifacts. This is backend-only.
+- Research Workflow Compiler and gated execution runtime for typed backend-only workflow modes,
+  dry-run previews, rebuilds from existing artifacts, artifact contracts, readiness reports, and
+  optional Evaluation Lab quality gates.
 
 ## Local Development
 
@@ -177,10 +180,103 @@ Most-used endpoints:
 - `GET /runtime/dead-letter`
 - `POST /runtime/jobs/{job_id}/restore`
 - `GET /runs/{thread_id}/runtime`
+- `GET /workflows/templates`
+- `GET /workflows/templates/{template_id}`
+- `POST /workflows/preview`
+- `POST /workflows/compile`
+- `POST /workflows/run`
+- `POST /runs/{thread_id}/workflows/rebuild`
+- `GET /runs/{thread_id}/workflow`
+- `GET /runs/{thread_id}/workflow/manifest`
+- `GET /runs/{thread_id}/workflow/readiness`
+- `GET /runs/{thread_id}/workflow/stages`
+- `GET /runs/{thread_id}/workflow/plan`
+- `POST /runs/{thread_id}/workflow/quality-gate`
 
 Specialized endpoints also exist for protocols, source discovery, document intelligence,
 retrieval, memory, temporal intelligence, quantitative intelligence, evidence, hypotheses, verification, synthesis,
 evaluation, benchmarks, and quality scores.
+
+## Research Workflow Compiler
+
+The workflow runtime is backend-only. It wraps the existing research service in a typed compiler
+and executor without changing the legacy `/run` behavior unless workflow fields are supplied.
+
+Built-in workflow modes include `quick_brief`, `deep_research`, `technical_due_diligence`,
+`framework_comparison`, `vendor_evaluation`, `legal_policy_review`, `implementation_planning`,
+`source_audit_only`, `evidence_extraction_only`, `verification_only`, `evaluation_only`,
+`adversarial_source_review`, `offline_benchmark`, and `rebuild_from_artifacts`.
+
+Each template defines stages, dependencies, artifact contracts, policies, success criteria, and
+failure behavior. The compiler resolves a template by `template_id`, explicit `mode`, or
+deterministic question inference, then writes:
+
+- `workflow_template.json` / `.md`
+- `workflow_compiled.json` / `.md`
+- `workflow_execution_plan.json` / `.md`
+- `workflow_dependency_graph.json` / `.md`
+- `workflow_artifact_contracts.json` / `.md`
+- `workflow_warnings.json` / `.md`
+
+Execution records every stage in `workflow_stage_results.json` / `.md`. Finalization validates
+required artifacts, then writes `workflow_artifact_validation.json` / `.md`,
+`workflow_manifest.json` / `.md`, `workflow_readiness.json` / `.md`, and
+`workflow_execution_summary.json` / `.md`. Existing guaranteed artifacts remain `plan.md`,
+`notes.md`, `sources.json`, and `report.md`.
+
+Preview is deterministic and does not execute stages:
+
+```bash
+curl http://localhost:8000/workflows/preview \
+  -H 'content-type: application/json' \
+  -d '{"question":"Compare LangGraph vs CrewAI", "mode":"framework_comparison"}'
+```
+
+Run a workflow offline with mock artifacts:
+
+```bash
+curl http://localhost:8000/workflows/run \
+  -H 'content-type: application/json' \
+  -d '{"question":"Validate workflow runtime", "mode":"quick_brief",
+       "settings_overrides":{"model_provider":"mock","mock_mode":true}}'
+```
+
+Rebuild downstream artifacts from an existing run without refetching or model calls by default:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/workflows/rebuild \
+  -H 'content-type: application/json' \
+  -d '{"thread_id":"<thread_id>", "mode":"verification_only"}'
+```
+
+Quality gates are optional. When `run_quality_gate` is true, the workflow adds a quality-gate
+stage and runs the selected Evaluation Lab gate in offline/mock mode, defaulting to `smoke`.
+Gate failures degrade readiness unless `WORKFLOWS_FAIL_ON_QUALITY_GATE_FAILURE=true`.
+
+Workflow settings:
+
+```bash
+WORKFLOWS_ENABLED=true
+WORKFLOWS_DEFAULT_MODE=quick_brief
+WORKFLOWS_MAX_STAGES=32
+WORKFLOWS_ALLOW_MOCK_AGENT=false
+WORKFLOWS_ALLOW_EXTERNAL_NETWORK=true
+WORKFLOWS_REBUILD_ALLOW_REFETCH=false
+WORKFLOWS_REBUILD_ALLOW_MODEL_CALLS=false
+WORKFLOWS_QUALITY_GATE_ENABLED=true
+WORKFLOWS_DEFAULT_QUALITY_GATE=smoke
+WORKFLOWS_FAIL_ON_QUALITY_GATE_FAILURE=false
+```
+
+Known limitations:
+
+- Optional stages run only when the matching backend subsystem is available; otherwise the stage is
+  skipped or the workflow is degraded according to the template policy.
+- Mock mode is for local development, CI, and artifact plumbing. It does not prove research quality.
+- Workflow readiness is a backend artifact and quality signal, not a guarantee of truth.
+- Passing the Evaluation Lab smoke gate does not prove live model quality.
+- Rebuild workflows use available artifacts and cannot recover missing source evidence unless
+  refetch or model calls are explicitly allowed.
 
 ## Agentic Research Control Plane
 

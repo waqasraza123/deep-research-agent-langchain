@@ -223,6 +223,27 @@ class Settings:
     agent_control_produce_markdown_artifacts: bool = True
     agent_control_produce_json_artifacts: bool = True
 
+    workflows_enabled: bool = True
+    workflows_default_mode: str = "quick_brief"
+    workflows_allow_custom_templates: bool = False
+    workflows_templates_dir: Path | None = None
+    workflows_max_stages: int = 32
+    workflows_max_artifacts: int = 128
+    workflows_max_runtime_seconds: int = 900
+    workflows_fail_on_required_stage_failure: bool = True
+    workflows_skip_optional_missing_subsystems: bool = True
+    workflows_write_markdown_artifacts: bool = True
+    workflows_write_json_artifacts: bool = True
+    workflows_allow_mock_agent: bool = False
+    workflows_allow_external_network: bool = True
+    workflows_rebuild_allow_refetch: bool = False
+    workflows_rebuild_allow_model_calls: bool = False
+    workflows_validate_artifacts_on_finalization: bool = True
+    workflows_human_review_required_for_sensitive: bool = True
+    workflows_quality_gate_enabled: bool = True
+    workflows_default_quality_gate: str = "smoke"
+    workflows_fail_on_quality_gate_failure: bool = False
+
     def default_budget(self):
         from .runtime.contracts import RunBudget
 
@@ -274,6 +295,7 @@ class Settings:
         evaluation_lab_gate_runs_dir_raw = _env_str("EVALUATION_LAB_GATE_RUNS_DIR", "")
         checkpoint_path_raw = _env_str("CHECKPOINT_PATH", "")
         runtime_sqlite_path_raw = _env_str("RUNTIME_SQLITE_PATH", "")
+        workflows_templates_dir_raw = _env_str("WORKFLOWS_TEMPLATES_DIR", "")
 
         return Settings(
             model_provider=model_provider,
@@ -691,6 +713,67 @@ class Settings:
             in ("1", "true", "yes"),
             agent_control_produce_json_artifacts=_env_str(
                 "AGENT_CONTROL_PRODUCE_JSON_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_enabled=_env_str("WORKFLOWS_ENABLED", "true").lower() in ("1", "true", "yes"),
+            workflows_default_mode=_env_str("WORKFLOWS_DEFAULT_MODE", "quick_brief"),
+            workflows_allow_custom_templates=_env_str(
+                "WORKFLOWS_ALLOW_CUSTOM_TEMPLATES", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_templates_dir=Path(workflows_templates_dir_raw)
+            if workflows_templates_dir_raw
+            else None,
+            workflows_max_stages=_clamp_int(_env_int("WORKFLOWS_MAX_STAGES", 32), 1, 256),
+            workflows_max_artifacts=_clamp_int(_env_int("WORKFLOWS_MAX_ARTIFACTS", 128), 1, 5000),
+            workflows_max_runtime_seconds=_clamp_int(
+                _env_int("WORKFLOWS_MAX_RUNTIME_SECONDS", 900), 1, 86_400
+            ),
+            workflows_fail_on_required_stage_failure=_env_str(
+                "WORKFLOWS_FAIL_ON_REQUIRED_STAGE_FAILURE", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_skip_optional_missing_subsystems=_env_str(
+                "WORKFLOWS_SKIP_OPTIONAL_MISSING_SUBSYSTEMS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_write_markdown_artifacts=_env_str(
+                "WORKFLOWS_WRITE_MARKDOWN_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_write_json_artifacts=_env_str(
+                "WORKFLOWS_WRITE_JSON_ARTIFACTS", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_allow_mock_agent=_env_str("WORKFLOWS_ALLOW_MOCK_AGENT", "false").lower()
+            in ("1", "true", "yes"),
+            workflows_allow_external_network=_env_str(
+                "WORKFLOWS_ALLOW_EXTERNAL_NETWORK", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_rebuild_allow_refetch=_env_str(
+                "WORKFLOWS_REBUILD_ALLOW_REFETCH", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_rebuild_allow_model_calls=_env_str(
+                "WORKFLOWS_REBUILD_ALLOW_MODEL_CALLS", "false"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_validate_artifacts_on_finalization=_env_str(
+                "WORKFLOWS_VALIDATE_ARTIFACTS_ON_FINALIZATION", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_human_review_required_for_sensitive=_env_str(
+                "WORKFLOWS_HUMAN_REVIEW_REQUIRED_FOR_SENSITIVE", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_quality_gate_enabled=_env_str(
+                "WORKFLOWS_QUALITY_GATE_ENABLED", "true"
+            ).lower()
+            in ("1", "true", "yes"),
+            workflows_default_quality_gate=_env_str("WORKFLOWS_DEFAULT_QUALITY_GATE", "smoke"),
+            workflows_fail_on_quality_gate_failure=_env_str(
+                "WORKFLOWS_FAIL_ON_QUALITY_GATE_FAILURE", "false"
             ).lower()
             in ("1", "true", "yes"),
         )

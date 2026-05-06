@@ -230,6 +230,26 @@ from .verification import (
 from .verification import (
     model_to_plain as verification_model_to_plain,
 )
+from .workflows import (
+    WorkflowCompiler,
+    WorkflowCompileRequest,
+    WorkflowExecutionContext,
+    WorkflowInput,
+    WorkflowMode,
+    WorkflowPreviewRequest,
+    WorkflowQualityGateRequest,
+    WorkflowRebuildRequest,
+    WorkflowRunRequest,
+    WorkflowTemplateRegistry,
+    execute_workflow,
+    preview_workflow,
+    rebuild_workflow,
+)
+from .workflows import (
+    model_to_plain as workflow_model_to_plain,
+)
+from .workflows.compiler import write_compiled_artifacts
+from .workflows.registry import load_custom_templates
 
 log = logging.getLogger("deep_research_agent.api")
 
@@ -253,6 +273,13 @@ class RunRequest(BaseModel):
     runtime_async: bool | None = None
     run_now: bool = False
     idempotency_key: str | None = None
+    workflow_mode: WorkflowMode | None = None
+    workflow_template_id: str | None = None
+    dry_run: bool = False
+    force_mock: bool = False
+    run_quality_gate: bool = False
+    quality_gate_id: str | None = None
+    rebuild_from_thread_id: str | None = None
 
 
 class ProtocolSelectRequest(BaseModel):
@@ -1543,6 +1570,14 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
     agent_control_plane = AgentControlPlane(runs_dir=settings.runs_dir, runtime_settings=settings)
     evaluation_lab_runner = EvaluationLabRunner(settings)
     quality_gate_runner = QualityGateRunner(settings, lab_runner=evaluation_lab_runner)
+    workflow_registry = WorkflowTemplateRegistry()
+    for custom_template in load_custom_templates(
+        settings.workflows_templates_dir,
+        enabled=settings.workflows_allow_custom_templates,
+        allow_custom_stage_type=settings.workflows_allow_custom_templates,
+    ):
+        workflow_registry.register_template(custom_template)
+    workflow_compiler = WorkflowCompiler(settings, workflow_registry)
 
     app = FastAPI(title="Deep Research Agent")
 
@@ -1973,8 +2008,126 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "warnings": kernel_model_to_plain(warnings),
         }
 
+    @app.get("/workflows/templates")
+    def workflow_templates() -> list[dict[str, Any]]:
+        return [
+            workflow_model_to_plain(template) for template in workflow_registry.list_templates()
+        ]
+
+    @app.get("/workflows/templates/{template_id}")
+    def workflow_template(template_id: str) -> dict[str, Any]:
+        try:
+            return workflow_model_to_plain(workflow_registry.get_template(template_id))
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/workflows/preview")
+    def workflows_preview(req: WorkflowPreviewRequest) -> dict[str, Any]:
+        try:
+            preview = preview_workflow(req, settings=settings, write_artifacts=req.write_artifacts)
+            return workflow_model_to_plain(preview)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/workflows/compile")
+    def workflows_compile(req: WorkflowCompileRequest) -> dict[str, Any]:
+        try:
+            compiled = workflow_compiler.compile(req, write_artifacts=req.write_artifacts)
+            if not req.write_artifacts:
+                return workflow_model_to_plain(compiled)
+            run_dir = ensure_thread_dir(settings.runs_dir, compiled.thread_id)
+            write_compiled_artifacts(run_dir, compiled)
+            return {
+                **workflow_model_to_plain(compiled),
+                "artifacts": [
+                    a.__dict__ for a in list_artifacts(settings.runs_dir, compiled.thread_id)
+                ],
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/workflows/run")
+    def workflows_run(req: WorkflowRunRequest) -> dict[str, Any]:
+        return _workflow_run_response(req)
+
+    @app.post("/runs/{thread_id}/workflows/rebuild")
+    def run_workflow_rebuild(
+        thread_id: str, req: WorkflowRebuildRequest | None = None
+    ) -> dict[str, Any]:
+        request = req or WorkflowRebuildRequest(thread_id=thread_id)
+        if request.thread_id != thread_id:
+            request = request.copy(update={"thread_id": thread_id})
+        try:
+            result = rebuild_workflow(request, settings=settings, service=service)
+            return workflow_model_to_plain(result)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/workflow")
+    def run_workflow(thread_id: str) -> dict[str, Any]:
+        return _read_workflow_json(thread_id, "workflow_execution_summary.json")
+
+    @app.get("/runs/{thread_id}/workflow/manifest")
+    def run_workflow_manifest(thread_id: str) -> dict[str, Any]:
+        return _read_workflow_json(thread_id, "workflow_manifest.json")
+
+    @app.get("/runs/{thread_id}/workflow/readiness")
+    def run_workflow_readiness(thread_id: str) -> dict[str, Any]:
+        return _read_workflow_json(thread_id, "workflow_readiness.json")
+
+    @app.get("/runs/{thread_id}/workflow/stages")
+    def run_workflow_stages(thread_id: str) -> dict[str, Any]:
+        return _read_workflow_json(thread_id, "workflow_stage_results.json")
+
+    @app.get("/runs/{thread_id}/workflow/plan")
+    def run_workflow_plan(thread_id: str) -> dict[str, Any]:
+        return _read_workflow_json(thread_id, "workflow_execution_plan.json")
+
+    @app.post("/runs/{thread_id}/workflow/quality-gate")
+    def run_workflow_quality_gate(
+        thread_id: str,
+        req: WorkflowQualityGateRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or WorkflowQualityGateRequest()
+        request = request.copy(
+            update={
+                "thread_id": thread_id,
+                "existing_run_id": thread_id,
+                "run_quality_gate": True,
+                "mode": request.mode or WorkflowMode.offline_benchmark,
+            }
+        )
+        return _workflow_run_response(request)
+
     @app.post("/run")
     def run(req: RunRequest) -> dict[str, Any]:
+        workflow_requested = bool(
+            req.workflow_mode
+            or req.workflow_template_id
+            or req.dry_run
+            or req.run_quality_gate
+            or req.quality_gate_id
+            or req.rebuild_from_thread_id
+        )
+        if settings.workflows_enabled and workflow_requested:
+            return _workflow_run_response(
+                WorkflowInput(
+                    question=req.question,
+                    urls=req.urls,
+                    thread_id=req.thread_id or req.rebuild_from_thread_id,
+                    mode=req.workflow_mode,
+                    template_id=req.workflow_template_id,
+                    existing_run_id=req.rebuild_from_thread_id,
+                    dry_run=req.dry_run,
+                    run_now=not req.dry_run,
+                    run_quality_gate=req.run_quality_gate,
+                    quality_gate_id=req.quality_gate_id,
+                    settings_overrides={"model_provider": "mock"}
+                    if req.force_mock or req.mock_mode
+                    else {},
+                    metadata={"compat_endpoint": "/run"},
+                )
+            )
         runtime_async_requested = (
             settings.runtime_async_enabled if req.runtime_async is None else req.runtime_async
         )
@@ -4786,6 +4939,44 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             "plan": discovery_model_to_plain(plan),
             "artifacts": artifacts,
         }
+
+    def _workflow_run_response(workflow_input: WorkflowInput) -> dict[str, Any]:
+        try:
+            compiled = workflow_compiler.compile(workflow_input, write_artifacts=True)
+            context = WorkflowExecutionContext(
+                compiled,
+                settings=settings,
+                service=service,
+                dry_run=workflow_input.dry_run or not workflow_input.run_now,
+                quality_gate_runner=quality_gate_runner,
+            )
+            result = execute_workflow(compiled, context)
+            return {
+                **workflow_model_to_plain(result),
+                "artifacts": [
+                    a.__dict__ for a in list_artifacts(settings.runs_dir, compiled.thread_id)
+                ],
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("workflow run failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+    def _read_workflow_json(thread_id: str, rel_path: str) -> dict[str, Any]:
+        try:
+            path = artifact_abs_path(settings.runs_dir, thread_id, rel_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Workflow artifact not found")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Invalid workflow artifact: {e}") from e
+        if not isinstance(payload, dict):
+            return {"value": payload}
+        return payload
 
     @app.post("/source-discovery/preview")
     def source_discovery_preview(req: SourceDiscoveryPreviewRequest) -> dict[str, Any]:
