@@ -177,6 +177,15 @@ from .runs.repository import (
     RunRepository,
     settings_snapshot_from_object,
 )
+from .runs.retention import (
+    RetentionHoldRequest,
+    RetentionPolicyRequest,
+    RetentionReleaseRequest,
+    add_retention_hold,
+    build_retention_policy,
+    read_retention_policy,
+    release_retention_hold,
+)
 from .runs.review import approve_review, get_review, reject_review, request_changes
 from .runs.review_dossier import (
     ReviewDossierRequest,
@@ -4583,6 +4592,75 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return model_to_dict(applied)
+
+    @app.post("/runs/{thread_id}/retention")
+    def run_retention_set(
+        thread_id: str,
+        req: RetentionPolicyRequest,
+    ) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            existing = None
+            try:
+                existing = read_retention_policy(settings.runs_dir, thread_id)
+            except FileNotFoundError:
+                existing = None
+            policy = build_retention_policy(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=req,
+                existing=existing,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _model_dump_jsonable(policy)
+
+    @app.get("/runs/{thread_id}/retention")
+    def run_retention_get(thread_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_retention_policy(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Retention policy not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/runs/{thread_id}/retention/hold")
+    def run_retention_hold(thread_id: str, req: RetentionHoldRequest) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            policy = add_retention_hold(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=req,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _model_dump_jsonable(policy)
+
+    @app.post("/runs/{thread_id}/retention/release")
+    def run_retention_release(thread_id: str, req: RetentionReleaseRequest) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            policy = release_retention_hold(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                request=req,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Retention policy not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _model_dump_jsonable(policy)
 
     @app.post("/runs/diff")
     def runs_diff(req: RunDiffRequest) -> dict[str, Any]:

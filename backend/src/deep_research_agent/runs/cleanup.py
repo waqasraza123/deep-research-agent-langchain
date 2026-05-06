@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from .contracts import RunStatus
 from .repository import RunRepository
+from .retention import read_retention_policy_or_none, retention_blocks_cleanup
 from .state_machine import TERMINAL_STATUSES
 
 
@@ -17,6 +18,8 @@ class CleanupPlanItem(BaseModel):
     created_at: datetime | None = None
     status: RunStatus | None = None
     paths: list[str] = Field(default_factory=list)
+    blocked: bool = False
+    blocked_reason: str = ""
 
 
 class CleanupPlan(BaseModel):
@@ -25,6 +28,7 @@ class CleanupPlan(BaseModel):
     max_dir_bytes: int
     delete_requested: bool = False
     items: list[CleanupPlanItem] = Field(default_factory=list)
+    protected_items: list[CleanupPlanItem] = Field(default_factory=list)
 
 
 def directory_size(path: Path) -> int:
@@ -57,6 +61,20 @@ def build_cleanup_plan(
             reasons.append("artifact directory exceeds size limit")
         if not reasons:
             continue
+        retention = read_retention_policy_or_none(repository.runs_dir, run.thread_id)
+        blocked_reason = retention_blocks_cleanup(retention, now=now)
+        if blocked_reason:
+            items[run.thread_id] = CleanupPlanItem(
+                thread_id=run.thread_id,
+                reason=", ".join(reasons),
+                size_bytes=size,
+                created_at=run.created_at,
+                status=run.status,
+                paths=[str(run_dir)],
+                blocked=True,
+                blocked_reason=blocked_reason,
+            )
+            continue
         items[run.thread_id] = CleanupPlanItem(
             thread_id=run.thread_id,
             reason=", ".join(reasons),
@@ -70,7 +88,8 @@ def build_cleanup_plan(
         generated_at=now,
         stale_after_hours=stale_after_hours,
         max_dir_bytes=max_dir_bytes,
-        items=list(items.values()),
+        items=[item for item in items.values() if not item.blocked],
+        protected_items=[item for item in items.values() if item.blocked],
     )
 
 
@@ -83,6 +102,14 @@ def apply_cleanup_plan(
 ) -> CleanupPlan:
     if not confirm_delete:
         raise ValueError("confirm_delete must be true to delete run artifacts")
+
+    protected = {item.thread_id: item.blocked_reason for item in plan.protected_items}
+    requested_protected = sorted(thread_id for thread_id in thread_ids if thread_id in protected)
+    if requested_protected:
+        reasons = ", ".join(
+            f"{thread_id} ({protected[thread_id]})" for thread_id in requested_protected
+        )
+        raise ValueError(f"Cannot delete retention-protected runs: {reasons}")
 
     planned = {item.thread_id for item in plan.items}
     for thread_id in thread_ids:

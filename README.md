@@ -31,6 +31,8 @@ traceable artifacts under `runs/<thread_id>/`.
 - Deterministic human-review dossiers with blocker criteria, required actions, confidence,
   verification, source-safety, provenance, replay, and export handoff status. See
   `docs/review-dossier.md`.
+- Run retention policies and legal holds that protect runs from cleanup until explicit retention
+  conditions are satisfied. See `docs/run-retention.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -176,6 +178,10 @@ Most-used endpoints:
 - `POST /runs/{thread_id}/review/approve`
 - `POST /runs/{thread_id}/review/request-changes`
 - `POST /runs/{thread_id}/review/reject`
+- `POST /runs/{thread_id}/retention`
+- `GET /runs/{thread_id}/retention`
+- `POST /runs/{thread_id}/retention/hold`
+- `POST /runs/{thread_id}/retention/release`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -736,6 +742,7 @@ temporal claim, quantitative profile, numeric claim, table/CSV profile, quantita
 source safety, sanitized source, evidence, hypothesis, verification, synthesis, evaluation,
 advanced intelligence summary, provenance, replay, quality, review dossier, and review artifacts.
 Export bundles live under `runs/<thread_id>/exports/`.
+Retention policies write `retention_policy.json` / `.md` and are honored by cleanup planning.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 
