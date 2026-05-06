@@ -163,6 +163,12 @@ from .retrieval import (
 )
 from .runs.cleanup import apply_cleanup_plan, build_cleanup_plan
 from .runs.contracts import ReviewState, RunCancellationRequest, RunStatus, model_to_dict
+from .runs.custody import (
+    RunCustodyRequest,
+    build_run_custody_certificate,
+    read_run_custody_certificate,
+    render_run_custody_certificate_markdown,
+)
 from .runs.export_bundle import (
     RunExportRequest,
     build_run_export_bundle,
@@ -4998,6 +5004,80 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
             return _model_dump_jsonable(verify_operator_audit(settings.runs_dir, thread_id))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.post("/runs/{thread_id}/custody")
+    def run_custody_create(
+        thread_id: str,
+        req: RunCustodyRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or RunCustodyRequest()
+        try:
+            run = run_repository.get(thread_id)
+            certificate = build_run_custody_certificate(
+                runs_dir=settings.runs_dir,
+                thread_id=thread_id,
+                run=run,
+                request=request,
+            )
+            run_repository.refresh_artifacts(thread_id)
+        except RunNotFoundError:
+            raise HTTPException(status_code=404, detail="Run not found") from None
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Run directory not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("custody certificate generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="custody.certificate_generated",
+            actor=certificate.requested_by,
+            summary="Run custody certificate was generated.",
+            thread_id=thread_id,
+            affected_thread_ids=[thread_id],
+            artifacts=["custody_certificate.json", "custody_certificate.md"],
+            metadata={
+                "readiness": certificate.readiness,
+                "blocker_count": len(certificate.blockers),
+                "warning_count": len(certificate.warnings),
+                "artifact_count": certificate.artifact_inventory.artifact_count,
+                "hashed_count": certificate.artifact_inventory.hashed_count,
+                "require_review_approval": request.require_review_approval,
+                "require_export_bundle": request.require_export_bundle,
+                "require_retention_policy": request.require_retention_policy,
+                "require_operator_audit": request.require_operator_audit,
+                "require_provenance": request.require_provenance,
+            },
+        )
+        run_repository.refresh_artifacts(thread_id)
+        return {
+            "thread_id": thread_id,
+            "certificate": _model_dump_jsonable(certificate),
+            "markdown_url": f"/runs/{thread_id}/custody/markdown",
+        }
+
+    @app.get("/runs/{thread_id}/custody")
+    def run_custody_get(thread_id: str) -> dict[str, Any]:
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            return _model_dump_jsonable(read_run_custody_certificate(settings.runs_dir, thread_id))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Custody certificate not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/{thread_id}/custody/markdown")
+    def run_custody_markdown(thread_id: str):
+        if run_repository.get_or_none(thread_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            certificate = read_run_custody_certificate(settings.runs_dir, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Custody certificate not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_run_custody_certificate_markdown(certificate))
 
     @app.get("/runs/{thread_id}/budget")
     def run_budget(thread_id: str) -> dict[str, Any]:

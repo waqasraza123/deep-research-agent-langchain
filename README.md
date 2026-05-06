@@ -33,9 +33,12 @@ traceable artifacts under `runs/<thread_id>/`.
   `docs/review-dossier.md`.
 - Run retention policies and legal holds that protect runs from cleanup until explicit retention
   conditions are satisfied. See `docs/run-retention.md`.
-- Append-only operator audit trails for review, retention, replay, export, and cleanup actions,
-  with per-run and global JSONL/Markdown logs plus hash-chain verification. See
+- Append-only operator audit trails for review, retention, replay, export, custody, and cleanup
+  actions, with per-run and global JSONL/Markdown logs plus hash-chain verification. See
   `docs/operator-audit.md`.
+- Run custody certificates that consolidate required-artifact checks, lifecycle/review state,
+  provenance, retention, export integrity, operator-audit verification, and artifact hashes for
+  handoff review. See `docs/run-custody.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -189,6 +192,9 @@ Most-used endpoints:
 - `GET /operator-audit/verify`
 - `GET /runs/{thread_id}/operator-audit`
 - `GET /runs/{thread_id}/operator-audit/verify`
+- `POST /runs/{thread_id}/custody`
+- `GET /runs/{thread_id}/custody`
+- `GET /runs/{thread_id}/custody/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -334,6 +340,19 @@ The export writer produces `exports/run_export.zip`, `exports/export_manifest.js
 exported SHA-256 hashes, redaction status, byte limits, and the download endpoint. By default raw
 `sources/` and `sanitized_sources/` payloads are excluded; include them only when the export target
 is trusted to receive captured source text.
+
+Generate a custody certificate before final handoff with:
+
+```bash
+curl http://localhost:8000/runs/<thread_id>/custody \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator","require_export_bundle":true,"require_provenance":true}'
+```
+
+The certificate writes `custody_certificate.json` / `.md` and summarizes lifecycle state, review
+approval, provenance completeness, retention policy, export bundle hash integrity, operator-audit
+verification, and artifact SHA-256 inventory. It is deterministic and does not run research or
+create builds.
 
 ## Agentic Research Control Plane
 
@@ -750,6 +769,7 @@ source safety, sanitized source, evidence, hypothesis, verification, synthesis, 
 advanced intelligence summary, provenance, replay, quality, review dossier, and review artifacts.
 Export bundles live under `runs/<thread_id>/exports/`.
 Retention policies write `retention_policy.json` / `.md` and are honored by cleanup planning.
+Custody certificates write `custody_certificate.json` / `.md` for final handoff readiness.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

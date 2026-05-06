@@ -37,6 +37,7 @@ PUBLIC_INCLUDE_PATTERNS = (
     "artifact_dependency_dag.*",
     "reproducibility_report.*",
     "replay_plan.*",
+    "custody_certificate.*",
     "quality_score.*",
     "evaluation.*",
     "verification_report.*",

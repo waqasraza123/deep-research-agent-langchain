@@ -1,8 +1,8 @@
 # Operator Audit Trail
 
 The operator audit subsystem records backend-only actions that change review state, retention
-policy, legal holds, replay outputs, export bundles, or cleanup state. It is file-backed and uses
-the same `runs/` artifact layout as the rest of the service.
+policy, legal holds, replay outputs, export bundles, custody certificates, or cleanup state. It is
+file-backed and uses the same `runs/` artifact layout as the rest of the service.
 
 Generated artifacts:
 
@@ -34,6 +34,7 @@ The API records an audit event after these operations complete successfully:
 - `POST /runs/{thread_id}/review/reject`
 - `POST /runs/{thread_id}/replay`
 - `POST /runs/{thread_id}/export`
+- `POST /runs/{thread_id}/custody`
 
 Cleanup events are written to the global audit trail after deletion completes. Per-run cleanup logs
 are not preserved for deleted run directories, so the global audit trail is the durable cleanup
