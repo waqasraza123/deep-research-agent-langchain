@@ -212,6 +212,12 @@ from .runs.handoff_release_ledger_verification import (
     read_handoff_release_ledger_verification_report,
     render_handoff_release_ledger_verification_markdown,
 )
+from .runs.handoff_release_attestation import (
+    HandoffReleaseAttestationRequest,
+    build_handoff_release_attestation,
+    read_handoff_release_attestation,
+    render_handoff_release_attestation_markdown,
+)
 from .runs.handoff_release_bundle import (
     HandoffReleaseBundleRequest,
     build_handoff_release_bundle,
@@ -5102,6 +5108,77 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_release_ledger_verification_markdown(report))
+
+    @app.post("/runs/handoff-release-attestation")
+    def handoff_release_attestation_create(
+        req: HandoffReleaseAttestationRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseAttestationRequest()
+        try:
+            attestation = build_handoff_release_attestation(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger or ledger verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release attestation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_attestation_generated",
+            actor=attestation.requested_by,
+            summary="Repository handoff release custody attestation was generated.",
+            artifacts=attestation.artifacts,
+            metadata={
+                "readiness": attestation.readiness,
+                "ledger_generated_at": attestation.ledger_generated_at,
+                "ledger_verification_generated_at": attestation.ledger_verification_generated_at,
+                "ledger_sha256": attestation.ledger_sha256,
+                "ledger_verification_sha256": attestation.ledger_verification_sha256,
+                "release_count": attestation.summary.release_count,
+                "artifact_count": attestation.summary.artifact_count,
+                "missing_artifact_count": attestation.summary.missing_artifact_count,
+                "unsafe_artifact_count": attestation.summary.unsafe_artifact_count,
+                "omitted_release_artifact_count": (
+                    attestation.summary.omitted_release_artifact_count
+                ),
+                "required_controls": attestation.required_controls,
+            },
+        )
+        return {
+            "attestation": _model_dump_jsonable(attestation),
+            "markdown_url": "/runs/handoff-release-attestation/markdown",
+        }
+
+    @app.get("/runs/handoff-release-attestation")
+    def handoff_release_attestation_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_handoff_release_attestation(settings.runs_dir))
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release attestation not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-release-attestation/markdown")
+    def handoff_release_attestation_markdown():
+        try:
+            attestation = read_handoff_release_attestation(settings.runs_dir)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release attestation not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_attestation_markdown(attestation))
 
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:

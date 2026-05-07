@@ -4,8 +4,8 @@ The operator audit subsystem records backend-only actions that change review sta
 policy, legal holds, replay outputs, export bundles, custody certificates, integrity reports,
 disclosure reports, handoff manifests, handoff registries, handoff releases, release
 verifications, release bundles, bundle verifications, release receipts, release ledgers, ledger
-verifications, or cleanup state. It is file-backed and uses the same `runs/` artifact layout as the
-rest of the service.
+verifications, release attestations, or cleanup state. It is file-backed and uses the same `runs/`
+artifact layout as the rest of the service.
 
 Generated artifacts:
 
@@ -49,6 +49,7 @@ The API records an audit event after these operations complete successfully:
 - `POST /runs/handoff-releases/{release_id}/receipt`
 - `POST /runs/handoff-release-ledger`
 - `POST /runs/handoff-release-ledger/verification`
+- `POST /runs/handoff-release-attestation`
 
 Cleanup events are written to the global audit trail after deletion completes. Per-run cleanup logs
 are not preserved for deleted run directories, so the global audit trail is the durable cleanup
@@ -74,6 +75,9 @@ transfer custody across release packages.
 
 Handoff release ledger verification events are global-only because they verify repository-level
 release custody snapshots.
+
+Handoff release attestation events are global-only because they certify repository-level transfer
+portfolio controls and do not mutate individual run packages.
 
 ## Event Shape
 

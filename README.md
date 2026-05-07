@@ -67,6 +67,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release ledger verification reports that compare saved custody ledgers with current
   release state, referenced artifacts, sidecars, and global operator audit. See
   `docs/handoff-release-ledger-verification.md`.
+- Handoff release attestations that certify the final transfer portfolio with deterministic hashes
+  over ledger controls, ledger verification, release artifacts, and audit state. See
+  `docs/handoff-release-attestation.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -243,6 +246,9 @@ Most-used endpoints:
 - `POST /runs/handoff-release-ledger/verification`
 - `GET /runs/handoff-release-ledger/verification`
 - `GET /runs/handoff-release-ledger/verification/markdown`
+- `POST /runs/handoff-release-attestation`
+- `GET /runs/handoff-release-attestation`
+- `GET /runs/handoff-release-attestation/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -550,6 +556,18 @@ curl http://localhost:8000/runs/handoff-release-ledger/verification \
 The ledger verification report checks sidecar consistency, recomputes a current custody snapshot,
 compares per-release transfer signals, verifies referenced artifacts still exist, and checks the
 global operator audit chain.
+
+Generate the final release custody attestation:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-attestation \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The attestation writes `runs/_handoff/handoff_release_attestation.json` / `.md`, requires a clean
+ledger and valid ledger verification by default, checks global audit integrity, and records
+deterministic SHA-256 hashes for the portfolio controls and referenced release artifacts.
 
 ## Agentic Research Control Plane
 
@@ -974,6 +992,7 @@ Repository-level handoff release bundles live under `runs/_handoff/releases/<rel
 Release receipts write `handoff_release_receipt.json` / `.md` beside the release bundle.
 The release custody ledger writes `runs/_handoff/handoff_release_ledger.json` / `.md`.
 Ledger verification writes `runs/_handoff/handoff_release_ledger_verification.json` / `.md`.
+Release attestation writes `runs/_handoff/handoff_release_attestation.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

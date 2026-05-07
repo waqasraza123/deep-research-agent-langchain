@@ -82,5 +82,9 @@ custody record. A snapshot mismatch usually means a release manifest, bundle, ve
 receipt, or audit state changed after the ledger was generated. Review the drift, regenerate the
 underlying control when needed, regenerate the ledger, then rerun verification.
 
+After verification is `valid`, generate the handoff release attestation described in
+`docs/handoff-release-attestation.md` to record final portfolio hashes over the ledger,
+verification sidecars, release artifacts, and global audit state.
+
 The verification report is a local deterministic sidecar. It does not replace immutable storage,
 recipient-side checksum validation, legal review, or centralized audit logging.
