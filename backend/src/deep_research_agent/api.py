@@ -200,6 +200,13 @@ from .runs.handoff_release import (
     read_handoff_release_manifest,
     render_handoff_release_markdown,
 )
+from .runs.handoff_release_bundle import (
+    HandoffReleaseBundleRequest,
+    build_handoff_release_bundle,
+    handoff_release_bundle_path,
+    read_handoff_release_bundle_manifest,
+    render_handoff_release_bundle_markdown,
+)
 from .runs.handoff_release_verification import (
     HandoffReleaseVerificationRequest,
     build_handoff_release_verification_report,
@@ -5018,6 +5025,97 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_release_verification_markdown(report))
+
+    @app.post("/runs/handoff-releases/{release_id}/bundle")
+    def handoff_release_bundle_create(
+        release_id: str,
+        req: HandoffReleaseBundleRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseBundleRequest()
+        try:
+            bundle = build_handoff_release_bundle(
+                runs_dir=settings.runs_dir,
+                release_id=release_id,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Handoff release not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release bundle generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        artifacts = [
+            bundle.archive_path,
+            f"_handoff/releases/{bundle.release_id}/handoff_release_bundle_manifest.json",
+            f"_handoff/releases/{bundle.release_id}/handoff_release_bundle_manifest.md",
+        ]
+        _record_operator_audit(
+            event_type="handoff.release_bundle_created",
+            actor=bundle.requested_by,
+            summary="Portable handoff release bundle was created.",
+            artifacts=artifacts,
+            metadata={
+                "release_id": bundle.release_id,
+                "readiness": bundle.readiness,
+                "archive_sha256": bundle.archive_sha256,
+                "archive_size_bytes": bundle.archive_size_bytes,
+                "selected_runs": bundle.summary.selected_runs,
+                "included_run_exports": bundle.summary.included_run_exports,
+                "missing_run_exports": bundle.summary.missing_run_exports,
+                "hash_mismatched_run_exports": bundle.summary.hash_mismatched_run_exports,
+                "required_controls": bundle.required_controls,
+            },
+        )
+        return {
+            "bundle": _model_dump_jsonable(bundle),
+            "download_url": f"/runs/handoff-releases/{release_id}/bundle/download",
+            "markdown_url": f"/runs/handoff-releases/{release_id}/bundle/markdown",
+        }
+
+    @app.get("/runs/handoff-releases/{release_id}/bundle")
+    def handoff_release_bundle_get(release_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_bundle_manifest(settings.runs_dir, release_id)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release bundle not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-releases/{release_id}/bundle/markdown")
+    def handoff_release_bundle_markdown(release_id: str):
+        try:
+            bundle = read_handoff_release_bundle_manifest(settings.runs_dir, release_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release bundle not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_bundle_markdown(bundle))
+
+    @app.get("/runs/handoff-releases/{release_id}/bundle/download")
+    def handoff_release_bundle_download(release_id: str):
+        try:
+            path = handoff_release_bundle_path(settings.runs_dir, release_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release bundle not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"{release_id}-handoff-release-bundle.zip",
+        )
 
     @app.get("/runs/handoff-releases/{release_id}/markdown")
     def handoff_release_markdown(release_id: str):

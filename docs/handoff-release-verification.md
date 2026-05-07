@@ -80,4 +80,6 @@ investigate any mismatch and regenerate the registry, release, and verification 
 current repository state should be the source of truth.
 
 The verification report is a sidecar audit artifact. It does not replace the release manifest or
-the per-run export bundles selected for transfer.
+the per-run export bundles selected for transfer. After a release verifies cleanly, create the
+portable bundle documented in `docs/handoff-release-bundle.md` so the release record,
+verification sidecars, registry snapshot, and selected run exports can be transferred together.

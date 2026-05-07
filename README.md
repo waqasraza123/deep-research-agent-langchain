@@ -53,6 +53,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release verification reports that re-check registry snapshot hashes, export archive
   hashes, release artifacts, and global operator audit before transfer. See
   `docs/handoff-release-verification.md`.
+- Portable handoff release bundles that package release metadata, verification sidecars, registry
+  snapshots, and selected run export archives for transfer. See
+  `docs/handoff-release-bundle.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -228,6 +231,10 @@ Most-used endpoints:
 - `POST /runs/handoff-releases/{release_id}/verification`
 - `GET /runs/handoff-releases/{release_id}/verification`
 - `GET /runs/handoff-releases/{release_id}/verification/markdown`
+- `POST /runs/handoff-releases/{release_id}/bundle`
+- `GET /runs/handoff-releases/{release_id}/bundle`
+- `GET /runs/handoff-releases/{release_id}/bundle/markdown`
+- `GET /runs/handoff-releases/{release_id}/bundle/download`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -456,6 +463,18 @@ curl http://localhost:8000/runs/handoff-releases/<release_id>/verification \
 The verification writes `handoff_release_verification.json` / `.md` beside the release manifest and
 checks registry snapshot hash drift, release artifacts, selected export hashes, and the global audit
 chain.
+
+Package a verified release for transfer:
+
+```bash
+curl http://localhost:8000/runs/handoff-releases/<release_id>/bundle \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The bundle writes `handoff_release_bundle.zip` plus JSON/Markdown sidecar manifests beside the
+release manifest, and includes release artifacts, verification artifacts, registry snapshots, and
+selected run export archives under stable archive paths.
 
 ## Agentic Research Control Plane
 
@@ -876,6 +895,7 @@ Custody certificates write `custody_certificate.json` / `.md` for final handoff 
 Integrity reports write `integrity_report.json` / `.md` for artifact drift checks.
 Disclosure reports write `disclosure_report.json` / `.md` for external handoff risk review.
 Handoff manifests write `handoff_manifest.json` / `.md` for final go/no-go review.
+Repository-level handoff release bundles live under `runs/_handoff/releases/<release_id>/`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

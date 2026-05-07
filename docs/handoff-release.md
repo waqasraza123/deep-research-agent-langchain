@@ -111,4 +111,5 @@ enforced.
 
 Before transfer, generate the verification report documented in
 `docs/handoff-release-verification.md` to re-check the release artifacts, registry snapshot hash,
-selected export archive hashes, and global operator audit chain.
+selected export archive hashes, and global operator audit chain. After verification, create the
+portable transfer package documented in `docs/handoff-release-bundle.md`.
