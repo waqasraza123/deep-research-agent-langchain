@@ -73,6 +73,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release attestation verification reports that re-check final portfolio certificates,
   control hashes, artifact hashes, sidecars, and global operator audit. See
   `docs/handoff-release-attestation-verification.md`.
+- Handoff release portfolio receipts that record recipient acknowledgement, transfer metadata, and
+  recipient-observed attestation checksums for final portfolio custody. See
+  `docs/handoff-release-portfolio-receipt.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -255,6 +258,9 @@ Most-used endpoints:
 - `POST /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification/markdown`
+- `POST /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -586,6 +592,22 @@ curl http://localhost:8000/runs/handoff-release-attestation/verification \
 The attestation verification report checks sidecar consistency, confirms the saved attestation is
 ready for reliance, compares current ledger control hashes with the saved certificate, re-hashes
 attested artifacts, and verifies the global operator audit chain.
+
+Record the final portfolio receipt:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-portfolio-receipt \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator",
+       "recipient":"external-review",
+       "transfer_method":"secure_object_storage",
+       "transfer_reference":"handoff-release-portfolio-key",
+       "recipient_attestation_sha256":"<sha256-from-recipient>"}'
+```
+
+The portfolio receipt writes `runs/_handoff/handoff_release_portfolio_receipt.json` / `.md`,
+requires ready attestation controls by default, checks the attestation verification hash, records
+recipient transfer metadata, and validates the recipient-observed attestation checksum.
 
 ## Agentic Research Control Plane
 
@@ -1013,6 +1035,7 @@ Ledger verification writes `runs/_handoff/handoff_release_ledger_verification.js
 Release attestation writes `runs/_handoff/handoff_release_attestation.json` / `.md`.
 Attestation verification writes
 `runs/_handoff/handoff_release_attestation_verification.json` / `.md`.
+Portfolio receipts write `runs/_handoff/handoff_release_portfolio_receipt.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

@@ -21,6 +21,9 @@ API endpoints:
 - `POST /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification/markdown`
+- `POST /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt/markdown`
 
 Generating an attestation records `handoff.release_attestation_generated` in the global operator
 audit trail.
@@ -97,4 +100,5 @@ The attestation is a local deterministic certificate. It does not replace immuta
 storage, recipient-side checksum validation, legal review, centralized audit logging, or external
 signature infrastructure. After generation, create the verification report documented in
 `docs/handoff-release-attestation-verification.md` to confirm the certified portfolio still matches
-current disk state.
+current disk state, then record the final portfolio receipt documented in
+`docs/handoff-release-portfolio-receipt.md`.

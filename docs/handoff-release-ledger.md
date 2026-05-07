@@ -26,6 +26,9 @@ API endpoints:
 - `POST /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification`
 - `GET /runs/handoff-release-attestation/verification/markdown`
+- `POST /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt`
+- `GET /runs/handoff-release-portfolio-receipt/markdown`
 
 Generating a ledger records `handoff.release_ledger_generated` in the global operator audit trail.
 
@@ -107,4 +110,5 @@ review. After generation, create the verification report documented in
 `docs/handoff-release-ledger-verification.md` to confirm the saved ledger still matches current
 release custody state. After verification is valid, generate the release attestation documented in
 `docs/handoff-release-attestation.md` to record final portfolio hashes, then verify that
-attestation with `docs/handoff-release-attestation-verification.md`.
+attestation with `docs/handoff-release-attestation-verification.md`. After recipient checksum
+confirmation, record the portfolio receipt in `docs/handoff-release-portfolio-receipt.md`.
