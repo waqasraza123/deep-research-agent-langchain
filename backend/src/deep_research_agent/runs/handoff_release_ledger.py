@@ -108,6 +108,21 @@ def build_handoff_release_ledger(
     request: HandoffReleaseLedgerRequest | None = None,
     releases: list[HandoffReleaseManifest] | None = None,
 ) -> HandoffReleaseLedger:
+    ledger = snapshot_handoff_release_ledger(
+        runs_dir=runs_dir,
+        request=request,
+        releases=releases,
+    )
+    write_handoff_release_ledger(runs_dir, ledger)
+    return ledger
+
+
+def snapshot_handoff_release_ledger(
+    *,
+    runs_dir: Path,
+    request: HandoffReleaseLedgerRequest | None = None,
+    releases: list[HandoffReleaseManifest] | None = None,
+) -> HandoffReleaseLedger:
     request = request or HandoffReleaseLedgerRequest()
     requested_by = request.requested_by.strip() if request.requested_by.strip() else "operator"
     all_releases = releases if releases is not None else list_handoff_release_manifests(runs_dir)
@@ -165,6 +180,7 @@ def build_handoff_release_ledger(
         ],
         warnings=warnings,
         required_controls={
+            "include_releases_without_receipt": request.include_releases_without_receipt,
             "release_ready": request.require_release_ready,
             "release_verification_valid": request.require_release_verification_valid,
             "bundle_ready": request.require_bundle_ready,
@@ -172,10 +188,10 @@ def build_handoff_release_ledger(
             "receipt_recorded": request.require_receipt_recorded,
             "recipient_checksum_match": request.require_recipient_checksum_match,
             "global_operator_audit": request.require_global_operator_audit,
+            "max_releases": request.max_releases,
         },
         notes=request.notes,
     )
-    write_handoff_release_ledger(runs_dir, ledger)
     return ledger
 
 

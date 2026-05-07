@@ -206,6 +206,12 @@ from .runs.handoff_release_ledger import (
     read_handoff_release_ledger,
     render_handoff_release_ledger_markdown,
 )
+from .runs.handoff_release_ledger_verification import (
+    HandoffReleaseLedgerVerificationRequest,
+    build_handoff_release_ledger_verification_report,
+    read_handoff_release_ledger_verification_report,
+    render_handoff_release_ledger_verification_markdown,
+)
 from .runs.handoff_release_bundle import (
     HandoffReleaseBundleRequest,
     build_handoff_release_bundle,
@@ -5030,6 +5036,72 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_release_ledger_markdown(ledger))
+
+    @app.post("/runs/handoff-release-ledger/verification")
+    def handoff_release_ledger_verify(
+        req: HandoffReleaseLedgerVerificationRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseLedgerVerificationRequest()
+        try:
+            report = build_handoff_release_ledger_verification_report(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release ledger verification failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_ledger_verified",
+            actor=report.requested_by,
+            summary="Repository handoff release custody ledger verification was generated.",
+            artifacts=report.artifacts,
+            metadata={
+                "readiness": report.readiness,
+                "failure_count": len(report.failures),
+                "warning_count": len(report.warnings),
+                "ledger_sha256": report.ledger_sha256,
+                "ledger_generated_at": report.ledger_generated_at,
+                "required_controls": report.required_controls,
+            },
+        )
+        return {
+            "verification": _model_dump_jsonable(report),
+            "markdown_url": "/runs/handoff-release-ledger/verification/markdown",
+        }
+
+    @app.get("/runs/handoff-release-ledger/verification")
+    def handoff_release_ledger_verification_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_ledger_verification_report(settings.runs_dir)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-release-ledger/verification/markdown")
+    def handoff_release_ledger_verification_markdown():
+        try:
+            report = read_handoff_release_ledger_verification_report(settings.runs_dir)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_ledger_verification_markdown(report))
 
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:

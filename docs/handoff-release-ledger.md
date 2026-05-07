@@ -17,6 +17,9 @@ API endpoints:
 - `POST /runs/handoff-release-ledger`
 - `GET /runs/handoff-release-ledger`
 - `GET /runs/handoff-release-ledger/markdown`
+- `POST /runs/handoff-release-ledger/verification`
+- `GET /runs/handoff-release-ledger/verification`
+- `GET /runs/handoff-release-ledger/verification/markdown`
 
 Generating a ledger records `handoff.release_ledger_generated` in the global operator audit trail.
 
@@ -94,4 +97,6 @@ request's required controls.
 
 The ledger is a snapshot, not immutable storage. Store it with release manifests, bundle manifests,
 bundle verification reports, receipts, and operator audit exports for portfolio-level custody
-review.
+review. After generation, create the verification report documented in
+`docs/handoff-release-ledger-verification.md` to confirm the saved ledger still matches current
+release custody state.
