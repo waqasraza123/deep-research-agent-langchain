@@ -70,6 +70,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release attestations that certify the final transfer portfolio with deterministic hashes
   over ledger controls, ledger verification, release artifacts, and audit state. See
   `docs/handoff-release-attestation.md`.
+- Handoff release attestation verification reports that re-check final portfolio certificates,
+  control hashes, artifact hashes, sidecars, and global operator audit. See
+  `docs/handoff-release-attestation-verification.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -249,6 +252,9 @@ Most-used endpoints:
 - `POST /runs/handoff-release-attestation`
 - `GET /runs/handoff-release-attestation`
 - `GET /runs/handoff-release-attestation/markdown`
+- `POST /runs/handoff-release-attestation/verification`
+- `GET /runs/handoff-release-attestation/verification`
+- `GET /runs/handoff-release-attestation/verification/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -568,6 +574,18 @@ curl http://localhost:8000/runs/handoff-release-attestation \
 The attestation writes `runs/_handoff/handoff_release_attestation.json` / `.md`, requires a clean
 ledger and valid ledger verification by default, checks global audit integrity, and records
 deterministic SHA-256 hashes for the portfolio controls and referenced release artifacts.
+
+Verify the final release custody attestation:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-attestation/verification \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The attestation verification report checks sidecar consistency, confirms the saved attestation is
+ready for reliance, compares current ledger control hashes with the saved certificate, re-hashes
+attested artifacts, and verifies the global operator audit chain.
 
 ## Agentic Research Control Plane
 
@@ -993,6 +1011,8 @@ Release receipts write `handoff_release_receipt.json` / `.md` beside the release
 The release custody ledger writes `runs/_handoff/handoff_release_ledger.json` / `.md`.
 Ledger verification writes `runs/_handoff/handoff_release_ledger_verification.json` / `.md`.
 Release attestation writes `runs/_handoff/handoff_release_attestation.json` / `.md`.
+Attestation verification writes
+`runs/_handoff/handoff_release_attestation_verification.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 
