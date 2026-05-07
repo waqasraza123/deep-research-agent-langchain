@@ -5,8 +5,8 @@ policy, legal holds, replay outputs, export bundles, custody certificates, integ
 disclosure reports, handoff manifests, handoff registries, handoff releases, release
 verifications, release bundles, bundle verifications, release receipts, release ledgers, ledger
 verifications, release attestations, attestation verifications, portfolio receipts, portfolio
-receipt verifications, portfolio closeouts, or cleanup state. It is file-backed and uses the same
-`runs/` artifact layout as the rest of the service.
+receipt verifications, portfolio closeouts, closeout verifications, or cleanup state. It is
+file-backed and uses the same `runs/` artifact layout as the rest of the service.
 
 Generated artifacts:
 
@@ -55,6 +55,7 @@ The API records an audit event after these operations complete successfully:
 - `POST /runs/handoff-release-portfolio-receipt`
 - `POST /runs/handoff-release-portfolio-receipt/verification`
 - `POST /runs/handoff-release-portfolio-closeout`
+- `POST /runs/handoff-release-portfolio-closeout/verification`
 
 Cleanup events are written to the global audit trail after deletion completes. Per-run cleanup logs
 are not preserved for deleted run directories, so the global audit trail is the durable cleanup
@@ -95,6 +96,9 @@ repository-level recipient acknowledgement without mutating individual run packa
 
 Handoff release portfolio closeout events are global-only because they consolidate repository-level
 custody controls into one final closeout manifest.
+
+Handoff release portfolio closeout verification events are global-only because they verify the
+final repository-level closeout manifest without mutating individual run packages.
 
 ## Event Shape
 

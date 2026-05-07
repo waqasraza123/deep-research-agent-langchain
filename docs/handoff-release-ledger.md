@@ -35,6 +35,9 @@ API endpoints:
 - `POST /runs/handoff-release-portfolio-closeout`
 - `GET /runs/handoff-release-portfolio-closeout`
 - `GET /runs/handoff-release-portfolio-closeout/markdown`
+- `POST /runs/handoff-release-portfolio-closeout/verification`
+- `GET /runs/handoff-release-portfolio-closeout/verification`
+- `GET /runs/handoff-release-portfolio-closeout/verification/markdown`
 
 Generating a ledger records `handoff.release_ledger_generated` in the global operator audit trail.
 
@@ -120,4 +123,5 @@ attestation with `docs/handoff-release-attestation-verification.md`. After recip
 confirmation, record the portfolio receipt in `docs/handoff-release-portfolio-receipt.md` and
 verify it with `docs/handoff-release-portfolio-receipt-verification.md`. Generate the final
 closeout manifest in `docs/handoff-release-portfolio-closeout.md` when every custody control is
-ready for closure.
+ready for closure, then verify it with
+`docs/handoff-release-portfolio-closeout-verification.md`.

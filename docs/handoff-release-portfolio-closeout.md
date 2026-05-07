@@ -17,6 +17,9 @@ API endpoints:
 - `POST /runs/handoff-release-portfolio-closeout`
 - `GET /runs/handoff-release-portfolio-closeout`
 - `GET /runs/handoff-release-portfolio-closeout/markdown`
+- `POST /runs/handoff-release-portfolio-closeout/verification`
+- `GET /runs/handoff-release-portfolio-closeout/verification`
+- `GET /runs/handoff-release-portfolio-closeout/verification/markdown`
 
 Generating closeout records `handoff.release_portfolio_closed` in the global operator audit trail.
 
@@ -116,4 +119,5 @@ closeout.
 
 The closeout is a local deterministic manifest. It does not replace immutable artifact storage,
 recipient-side checksum validation, legal review, centralized audit logging, or external signature
-infrastructure.
+infrastructure. After generation, create the verification report documented in
+`docs/handoff-release-portfolio-closeout-verification.md`.
