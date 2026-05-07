@@ -76,6 +76,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release portfolio receipts that record recipient acknowledgement, transfer metadata, and
   recipient-observed attestation checksums for final portfolio custody. See
   `docs/handoff-release-portfolio-receipt.md`.
+- Handoff release portfolio receipt verification reports that confirm final receipt sidecars,
+  attestation hashes, recipient checksums, and global operator audit. See
+  `docs/handoff-release-portfolio-receipt-verification.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -261,6 +264,9 @@ Most-used endpoints:
 - `POST /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt/markdown`
+- `POST /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -608,6 +614,18 @@ curl http://localhost:8000/runs/handoff-release-portfolio-receipt \
 The portfolio receipt writes `runs/_handoff/handoff_release_portfolio_receipt.json` / `.md`,
 requires ready attestation controls by default, checks the attestation verification hash, records
 recipient transfer metadata, and validates the recipient-observed attestation checksum.
+
+Verify the final portfolio receipt:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-portfolio-receipt/verification \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The portfolio receipt verification report checks receipt sidecar consistency, confirms receipt
+readiness, compares current attestation and attestation verification state with the saved receipt,
+validates the recipient checksum, and verifies the global operator audit chain.
 
 ## Agentic Research Control Plane
 
@@ -1036,6 +1054,8 @@ Release attestation writes `runs/_handoff/handoff_release_attestation.json` / `.
 Attestation verification writes
 `runs/_handoff/handoff_release_attestation_verification.json` / `.md`.
 Portfolio receipts write `runs/_handoff/handoff_release_portfolio_receipt.json` / `.md`.
+Portfolio receipt verification writes
+`runs/_handoff/handoff_release_portfolio_receipt_verification.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

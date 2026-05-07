@@ -230,6 +230,12 @@ from .runs.handoff_release_portfolio_receipt import (
     read_handoff_release_portfolio_receipt,
     render_handoff_release_portfolio_receipt_markdown,
 )
+from .runs.handoff_release_portfolio_receipt_verification import (
+    HandoffReleasePortfolioReceiptVerificationRequest,
+    build_handoff_release_portfolio_receipt_verification_report,
+    read_handoff_release_portfolio_receipt_verification_report,
+    render_handoff_release_portfolio_receipt_verification_markdown,
+)
 from .runs.handoff_release_bundle import (
     HandoffReleaseBundleRequest,
     build_handoff_release_bundle,
@@ -5335,6 +5341,82 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_release_portfolio_receipt_markdown(receipt))
+
+    @app.post("/runs/handoff-release-portfolio-receipt/verification")
+    def handoff_release_portfolio_receipt_verify(
+        req: HandoffReleasePortfolioReceiptVerificationRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleasePortfolioReceiptVerificationRequest()
+        try:
+            report = build_handoff_release_portfolio_receipt_verification_report(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio receipt not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release portfolio receipt verification failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_portfolio_receipt_verified",
+            actor=report.requested_by,
+            summary="Repository handoff release portfolio receipt verification was generated.",
+            artifacts=report.artifacts,
+            metadata={
+                "readiness": report.readiness,
+                "failure_count": len(report.failures),
+                "warning_count": len(report.warnings),
+                "receipt_sha256": report.receipt_sha256,
+                "receipt_generated_at": report.receipt_generated_at,
+                "current_attestation_sha256": report.current_attestation_sha256,
+                "current_attestation_verification_sha256": (
+                    report.current_attestation_verification_sha256
+                ),
+                "required_controls": report.required_controls,
+            },
+        )
+        return {
+            "verification": _model_dump_jsonable(report),
+            "markdown_url": "/runs/handoff-release-portfolio-receipt/verification/markdown",
+        }
+
+    @app.get("/runs/handoff-release-portfolio-receipt/verification")
+    def handoff_release_portfolio_receipt_verification_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_portfolio_receipt_verification_report(
+                    settings.runs_dir
+                )
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio receipt verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-release-portfolio-receipt/verification/markdown")
+    def handoff_release_portfolio_receipt_verification_markdown():
+        try:
+            report = read_handoff_release_portfolio_receipt_verification_report(
+                settings.runs_dir
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio receipt verification not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(
+            render_handoff_release_portfolio_receipt_verification_markdown(report)
+        )
 
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:

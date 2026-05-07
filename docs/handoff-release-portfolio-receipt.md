@@ -17,6 +17,9 @@ API endpoints:
 - `POST /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt/markdown`
+- `POST /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification/markdown`
 
 Generating a receipt records `handoff.release_portfolio_receipt_recorded` in the global operator
 audit trail.
@@ -115,4 +118,6 @@ receipt only after the recipient confirms the corrected hash.
 Portfolio receipts are local deterministic custody artifacts. They do not move files, prove legal
 acceptance, replace recipient-side validation, or provide immutable storage. Store the receipt with
 the attestation, attestation verification report, release ledger, ledger verification report, and
-global operator audit export for the final portfolio handoff record.
+global operator audit export for the final portfolio handoff record. After recording the receipt,
+create the verification report documented in
+`docs/handoff-release-portfolio-receipt-verification.md`.

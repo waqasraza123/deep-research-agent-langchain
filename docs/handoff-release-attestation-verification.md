@@ -21,6 +21,9 @@ API endpoints:
 - `POST /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt`
 - `GET /runs/handoff-release-portfolio-receipt/markdown`
+- `POST /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification`
+- `GET /runs/handoff-release-portfolio-receipt/verification/markdown`
 
 Generating a report records `handoff.release_attestation_verified` in the global operator audit
 trail.
@@ -94,4 +97,5 @@ The verification report is a local deterministic sidecar. It does not replace im
 storage, recipient-side checksum validation, legal review, centralized audit logging, or external
 signature infrastructure. After verification is valid and the recipient confirms the portfolio
 checksum, record the portfolio receipt documented in
-`docs/handoff-release-portfolio-receipt.md`.
+`docs/handoff-release-portfolio-receipt.md`, then verify the receipt with
+`docs/handoff-release-portfolio-receipt-verification.md`.
