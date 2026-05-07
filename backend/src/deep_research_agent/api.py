@@ -236,6 +236,12 @@ from .runs.handoff_release_portfolio_receipt_verification import (
     read_handoff_release_portfolio_receipt_verification_report,
     render_handoff_release_portfolio_receipt_verification_markdown,
 )
+from .runs.handoff_release_portfolio_closeout import (
+    HandoffReleasePortfolioCloseoutRequest,
+    build_handoff_release_portfolio_closeout,
+    read_handoff_release_portfolio_closeout,
+    render_handoff_release_portfolio_closeout_markdown,
+)
 from .runs.handoff_release_bundle import (
     HandoffReleaseBundleRequest,
     build_handoff_release_bundle,
@@ -5417,6 +5423,79 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         return PlainTextResponse(
             render_handoff_release_portfolio_receipt_verification_markdown(report)
         )
+
+    @app.post("/runs/handoff-release-portfolio-closeout")
+    def handoff_release_portfolio_closeout_create(
+        req: HandoffReleasePortfolioCloseoutRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleasePortfolioCloseoutRequest()
+        try:
+            closeout = build_handoff_release_portfolio_closeout(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio closeout prerequisites not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release portfolio closeout failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_portfolio_closed",
+            actor=closeout.requested_by,
+            summary="Repository handoff release portfolio closeout was generated.",
+            artifacts=closeout.artifacts,
+            metadata={
+                "readiness": closeout.readiness,
+                "release_count": closeout.summary.release_count,
+                "attested_artifacts": closeout.summary.attested_artifacts,
+                "final_artifact_count": closeout.summary.final_artifact_count,
+                "missing_artifact_count": closeout.summary.missing_artifact_count,
+                "unsafe_artifact_count": closeout.summary.unsafe_artifact_count,
+                "global_operator_audit_valid": (
+                    closeout.summary.global_operator_audit_valid
+                ),
+                "global_operator_audit_event_count": (
+                    closeout.summary.global_operator_audit_event_count
+                ),
+                "required_controls": closeout.required_controls,
+            },
+        )
+        return {
+            "closeout": _model_dump_jsonable(closeout),
+            "markdown_url": "/runs/handoff-release-portfolio-closeout/markdown",
+        }
+
+    @app.get("/runs/handoff-release-portfolio-closeout")
+    def handoff_release_portfolio_closeout_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_portfolio_closeout(settings.runs_dir)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio closeout not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-release-portfolio-closeout/markdown")
+    def handoff_release_portfolio_closeout_markdown():
+        try:
+            closeout = read_handoff_release_portfolio_closeout(settings.runs_dir)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release portfolio closeout not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_portfolio_closeout_markdown(closeout))
 
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:

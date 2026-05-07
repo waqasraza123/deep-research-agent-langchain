@@ -20,6 +20,9 @@ API endpoints:
 - `POST /runs/handoff-release-portfolio-receipt/verification`
 - `GET /runs/handoff-release-portfolio-receipt/verification`
 - `GET /runs/handoff-release-portfolio-receipt/verification/markdown`
+- `POST /runs/handoff-release-portfolio-closeout`
+- `GET /runs/handoff-release-portfolio-closeout`
+- `GET /runs/handoff-release-portfolio-closeout/markdown`
 
 Generating a receipt records `handoff.release_portfolio_receipt_recorded` in the global operator
 audit trail.
@@ -120,4 +123,5 @@ acceptance, replace recipient-side validation, or provide immutable storage. Sto
 the attestation, attestation verification report, release ledger, ledger verification report, and
 global operator audit export for the final portfolio handoff record. After recording the receipt,
 create the verification report documented in
-`docs/handoff-release-portfolio-receipt-verification.md`.
+`docs/handoff-release-portfolio-receipt-verification.md`, then generate the closeout manifest in
+`docs/handoff-release-portfolio-closeout.md`.

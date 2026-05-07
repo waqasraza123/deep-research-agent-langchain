@@ -79,6 +79,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release portfolio receipt verification reports that confirm final receipt sidecars,
   attestation hashes, recipient checksums, and global operator audit. See
   `docs/handoff-release-portfolio-receipt-verification.md`.
+- Handoff release portfolio closeouts that consolidate final custody readiness, cross-artifact
+  consistency, closeout artifact hashes, and audit state into one closure manifest. See
+  `docs/handoff-release-portfolio-closeout.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -267,6 +270,9 @@ Most-used endpoints:
 - `POST /runs/handoff-release-portfolio-receipt/verification`
 - `GET /runs/handoff-release-portfolio-receipt/verification`
 - `GET /runs/handoff-release-portfolio-receipt/verification/markdown`
+- `POST /runs/handoff-release-portfolio-closeout`
+- `GET /runs/handoff-release-portfolio-closeout`
+- `GET /runs/handoff-release-portfolio-closeout/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -626,6 +632,18 @@ curl http://localhost:8000/runs/handoff-release-portfolio-receipt/verification \
 The portfolio receipt verification report checks receipt sidecar consistency, confirms receipt
 readiness, compares current attestation and attestation verification state with the saved receipt,
 validates the recipient checksum, and verifies the global operator audit chain.
+
+Generate the final portfolio closeout:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-portfolio-closeout \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The closeout writes `runs/_handoff/handoff_release_portfolio_closeout.json` / `.md`, requires all
+final custody controls by default, checks cross-artifact consistency, hashes the final closeout
+artifact set, and records one final go/no-go readiness state.
 
 ## Agentic Research Control Plane
 
@@ -1056,6 +1074,7 @@ Attestation verification writes
 Portfolio receipts write `runs/_handoff/handoff_release_portfolio_receipt.json` / `.md`.
 Portfolio receipt verification writes
 `runs/_handoff/handoff_release_portfolio_receipt_verification.json` / `.md`.
+Portfolio closeouts write `runs/_handoff/handoff_release_portfolio_closeout.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 
