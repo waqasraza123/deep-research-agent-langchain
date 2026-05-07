@@ -213,6 +213,12 @@ from .runs.handoff_release_bundle_verification import (
     read_handoff_release_bundle_verification_report,
     render_handoff_release_bundle_verification_markdown,
 )
+from .runs.handoff_release_receipt import (
+    HandoffReleaseReceiptRequest,
+    build_handoff_release_receipt,
+    read_handoff_release_receipt,
+    render_handoff_release_receipt_markdown,
+)
 from .runs.handoff_release_verification import (
     HandoffReleaseVerificationRequest,
     build_handoff_release_verification_report,
@@ -5180,6 +5186,79 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return PlainTextResponse(render_handoff_release_bundle_verification_markdown(report))
+
+    @app.post("/runs/handoff-releases/{release_id}/receipt")
+    def handoff_release_receipt_create(
+        release_id: str,
+        req: HandoffReleaseReceiptRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseReceiptRequest()
+        try:
+            receipt = build_handoff_release_receipt(
+                runs_dir=settings.runs_dir,
+                release_id=release_id,
+                request=request,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release bundle or receipt dependency not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release receipt generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_receipt_recorded",
+            actor=receipt.requested_by,
+            summary="Handoff release transfer receipt was recorded.",
+            artifacts=receipt.artifacts,
+            metadata={
+                "release_id": receipt.release_id,
+                "readiness": receipt.readiness,
+                "outcome": receipt.outcome,
+                "recipient": receipt.recipient,
+                "transfer_method": receipt.transfer_method,
+                "transfer_reference": receipt.transfer_reference,
+                "bundle_archive_sha256": receipt.bundle_archive_sha256,
+                "recipient_bundle_sha256": receipt.recipient_bundle_sha256,
+                "required_controls": receipt.required_controls,
+                "blocker_count": receipt.summary.blocker_count,
+                "warning_count": receipt.summary.warning_count,
+            },
+        )
+        return {
+            "receipt": _model_dump_jsonable(receipt),
+            "markdown_url": f"/runs/handoff-releases/{release_id}/receipt/markdown",
+        }
+
+    @app.get("/runs/handoff-releases/{release_id}/receipt")
+    def handoff_release_receipt_get(release_id: str) -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(
+                read_handoff_release_receipt(settings.runs_dir, release_id)
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release receipt not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-releases/{release_id}/receipt/markdown")
+    def handoff_release_receipt_markdown(release_id: str):
+        try:
+            receipt = read_handoff_release_receipt(settings.runs_dir, release_id)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release receipt not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_receipt_markdown(receipt))
 
     @app.get("/runs/handoff-releases/{release_id}/bundle/download")
     def handoff_release_bundle_download(release_id: str):

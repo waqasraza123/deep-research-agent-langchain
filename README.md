@@ -59,6 +59,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release bundle verification reports that validate transfer ZIP hashes, manifest
   inventory, archive entry hashes, path safety, and global operator audit before or after copying.
   See `docs/handoff-release-bundle-verification.md`.
+- Handoff release receipts that record recipient, transfer reference, recipient checksum, outcome,
+  bundle verification status, and audit checks for final transfer custody. See
+  `docs/handoff-release-receipt.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -241,6 +244,9 @@ Most-used endpoints:
 - `POST /runs/handoff-releases/{release_id}/bundle/verification`
 - `GET /runs/handoff-releases/{release_id}/bundle/verification`
 - `GET /runs/handoff-releases/{release_id}/bundle/verification/markdown`
+- `POST /runs/handoff-releases/{release_id}/receipt`
+- `GET /runs/handoff-releases/{release_id}/receipt`
+- `GET /runs/handoff-releases/{release_id}/receipt/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -493,6 +499,22 @@ curl http://localhost:8000/runs/handoff-releases/<release_id>/bundle/verificatio
 The bundle verification report checks ZIP hash and size against the sidecar manifest, validates
 manifest-listed entries and SHA-256 values, rejects unsafe archive paths, and verifies the global
 operator audit chain.
+
+Record the final transfer receipt:
+
+```bash
+curl http://localhost:8000/runs/handoff-releases/<release_id>/receipt \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator",
+       "recipient":"external-review",
+       "transfer_method":"secure_object_storage",
+       "transfer_reference":"handoff-release-object-key",
+       "recipient_bundle_sha256":"<sha256-from-recipient>"}'
+```
+
+The receipt writes `handoff_release_receipt.json` / `.md`, records recipient and transfer metadata,
+checks current and recipient-observed bundle hashes, confirms bundle verification status, and
+records the final custody event in the global operator audit trail.
 
 ## Agentic Research Control Plane
 
@@ -914,6 +936,7 @@ Integrity reports write `integrity_report.json` / `.md` for artifact drift check
 Disclosure reports write `disclosure_report.json` / `.md` for external handoff risk review.
 Handoff manifests write `handoff_manifest.json` / `.md` for final go/no-go review.
 Repository-level handoff release bundles live under `runs/_handoff/releases/<release_id>/`.
+Release receipts write `handoff_release_receipt.json` / `.md` beside the release bundle.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

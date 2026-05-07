@@ -91,3 +91,5 @@ manifest and verification report.
 Use relaxed required controls only for internal exception workflows, and keep the reason in
 `notes`. The verification report is a deterministic local artifact; it does not replace immutable
 object storage, recipient-side checksum validation, legal review, or centralized audit logging.
+After recipient checksum confirmation, record the transfer receipt documented in
+`docs/handoff-release-receipt.md`.
