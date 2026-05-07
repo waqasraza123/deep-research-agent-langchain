@@ -62,6 +62,8 @@ traceable artifacts under `runs/<thread_id>/`.
 - Handoff release receipts that record recipient, transfer reference, recipient checksum, outcome,
   bundle verification status, and audit checks for final transfer custody. See
   `docs/handoff-release-receipt.md`.
+- Repository-level handoff release ledgers that index release, bundle, verification, receipt,
+  checksum, and audit readiness across transfer packages. See `docs/handoff-release-ledger.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -232,6 +234,9 @@ Most-used endpoints:
 - `GET /runs/handoff-registry/markdown`
 - `POST /runs/handoff-releases`
 - `GET /runs/handoff-releases`
+- `POST /runs/handoff-release-ledger`
+- `GET /runs/handoff-release-ledger`
+- `GET /runs/handoff-release-ledger/markdown`
 - `GET /runs/handoff-releases/{release_id}`
 - `GET /runs/handoff-releases/{release_id}/markdown`
 - `POST /runs/handoff-releases/{release_id}/verification`
@@ -515,6 +520,18 @@ curl http://localhost:8000/runs/handoff-releases/<release_id>/receipt \
 The receipt writes `handoff_release_receipt.json` / `.md`, records recipient and transfer metadata,
 checks current and recipient-observed bundle hashes, confirms bundle verification status, and
 records the final custody event in the global operator audit trail.
+
+Build a repository-level release custody ledger:
+
+```bash
+curl http://localhost:8000/runs/handoff-release-ledger \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The ledger writes `runs/_handoff/handoff_release_ledger.json` / `.md` and indexes each release's
+release verification, bundle, bundle verification, receipt, recipient checksum, and global audit
+readiness.
 
 ## Agentic Research Control Plane
 
@@ -937,6 +954,7 @@ Disclosure reports write `disclosure_report.json` / `.md` for external handoff r
 Handoff manifests write `handoff_manifest.json` / `.md` for final go/no-go review.
 Repository-level handoff release bundles live under `runs/_handoff/releases/<release_id>/`.
 Release receipts write `handoff_release_receipt.json` / `.md` beside the release bundle.
+The release custody ledger writes `runs/_handoff/handoff_release_ledger.json` / `.md`.
 Fetched source text and metadata live under
 `runs/<thread_id>/sources/`.
 

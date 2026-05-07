@@ -200,6 +200,12 @@ from .runs.handoff_release import (
     read_handoff_release_manifest,
     render_handoff_release_markdown,
 )
+from .runs.handoff_release_ledger import (
+    HandoffReleaseLedgerRequest,
+    build_handoff_release_ledger,
+    read_handoff_release_ledger,
+    render_handoff_release_ledger_markdown,
+)
 from .runs.handoff_release_bundle import (
     HandoffReleaseBundleRequest,
     build_handoff_release_bundle,
@@ -4961,6 +4967,69 @@ def create_app(*, settings: Settings | None = None, service: AgentService | None
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return [_model_dump_jsonable(release) for release in releases]
+
+    @app.post("/runs/handoff-release-ledger")
+    def handoff_release_ledger_create(
+        req: HandoffReleaseLedgerRequest | None = None,
+    ) -> dict[str, Any]:
+        request = req or HandoffReleaseLedgerRequest()
+        try:
+            ledger = build_handoff_release_ledger(
+                runs_dir=settings.runs_dir,
+                request=request,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            log.exception("handoff release ledger generation failed")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        _record_operator_audit(
+            event_type="handoff.release_ledger_generated",
+            actor=ledger.requested_by,
+            summary="Repository handoff release custody ledger was generated.",
+            artifacts=ledger.artifacts,
+            metadata={
+                "indexed_releases": ledger.summary.indexed_releases,
+                "complete": ledger.summary.complete,
+                "needs_attention": ledger.summary.needs_attention,
+                "blocked": ledger.summary.blocked,
+                "missing_receipts": ledger.summary.missing_receipts,
+                "missing_bundles": ledger.summary.missing_bundles,
+                "invalid_bundle_hashes": ledger.summary.invalid_bundle_hashes,
+                "invalid_recipient_checksums": ledger.summary.invalid_recipient_checksums,
+                "operator_audit_invalid": ledger.summary.operator_audit_invalid,
+                "required_controls": ledger.required_controls,
+            },
+        )
+        return {
+            "ledger": _model_dump_jsonable(ledger),
+            "markdown_url": "/runs/handoff-release-ledger/markdown",
+        }
+
+    @app.get("/runs/handoff-release-ledger")
+    def handoff_release_ledger_get() -> dict[str, Any]:
+        try:
+            return _model_dump_jsonable(read_handoff_release_ledger(settings.runs_dir))
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/runs/handoff-release-ledger/markdown")
+    def handoff_release_ledger_markdown():
+        try:
+            ledger = read_handoff_release_ledger(settings.runs_dir)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail="Handoff release ledger not found",
+            ) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return PlainTextResponse(render_handoff_release_ledger_markdown(ledger))
 
     @app.get("/runs/handoff-releases/{release_id}")
     def handoff_release_get(release_id: str) -> dict[str, Any]:

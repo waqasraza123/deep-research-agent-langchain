@@ -112,4 +112,5 @@ package and record a new receipt after the recipient confirms the corrected hash
 Receipts are local deterministic custody artifacts. They do not move files, prove legal acceptance,
 replace recipient-side validation, or provide immutable storage. Store the receipt with the bundle,
 sidecar manifest, bundle verification report, and global operator audit export for the final
-handoff record.
+handoff record. After recording receipts, generate the repository-level ledger documented in
+`docs/handoff-release-ledger.md` to summarize final transfer custody across release packages.
