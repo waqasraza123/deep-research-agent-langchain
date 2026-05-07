@@ -56,6 +56,9 @@ traceable artifacts under `runs/<thread_id>/`.
 - Portable handoff release bundles that package release metadata, verification sidecars, registry
   snapshots, and selected run export archives for transfer. See
   `docs/handoff-release-bundle.md`.
+- Handoff release bundle verification reports that validate transfer ZIP hashes, manifest
+  inventory, archive entry hashes, path safety, and global operator audit before or after copying.
+  See `docs/handoff-release-bundle-verification.md`.
 - Source safety, temporal, quantitative, hypothesis, and provenance signals are merged into
   `advanced_intelligence_summary.json` / `.md`. See `docs/advanced-intelligence-pipeline.md`.
 - Model provider support for `openai`, `ollama`, `llamacpp`, and deterministic `mock`.
@@ -235,6 +238,9 @@ Most-used endpoints:
 - `GET /runs/handoff-releases/{release_id}/bundle`
 - `GET /runs/handoff-releases/{release_id}/bundle/markdown`
 - `GET /runs/handoff-releases/{release_id}/bundle/download`
+- `POST /runs/handoff-releases/{release_id}/bundle/verification`
+- `GET /runs/handoff-releases/{release_id}/bundle/verification`
+- `GET /runs/handoff-releases/{release_id}/bundle/verification/markdown`
 - `POST /runtime/jobs`
 - `GET /runtime/jobs`
 - `GET /runtime/jobs/{job_id}`
@@ -475,6 +481,18 @@ curl http://localhost:8000/runs/handoff-releases/<release_id>/bundle \
 The bundle writes `handoff_release_bundle.zip` plus JSON/Markdown sidecar manifests beside the
 release manifest, and includes release artifacts, verification artifacts, registry snapshots, and
 selected run export archives under stable archive paths.
+
+Verify the transfer ZIP before or after copying:
+
+```bash
+curl http://localhost:8000/runs/handoff-releases/<release_id>/bundle/verification \
+  -H 'content-type: application/json' \
+  -d '{"requested_by":"operator"}'
+```
+
+The bundle verification report checks ZIP hash and size against the sidecar manifest, validates
+manifest-listed entries and SHA-256 values, rejects unsafe archive paths, and verifies the global
+operator audit chain.
 
 ## Agentic Research Control Plane
 

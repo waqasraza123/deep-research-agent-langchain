@@ -18,6 +18,9 @@ API endpoints:
 - `GET /runs/handoff-releases/{release_id}/bundle`
 - `GET /runs/handoff-releases/{release_id}/bundle/markdown`
 - `GET /runs/handoff-releases/{release_id}/bundle/download`
+- `POST /runs/handoff-releases/{release_id}/bundle/verification`
+- `GET /runs/handoff-releases/{release_id}/bundle/verification`
+- `GET /runs/handoff-releases/{release_id}/bundle/verification/markdown`
 
 Generating a bundle records `handoff.release_bundle_created` in the global operator audit trail.
 
@@ -102,3 +105,5 @@ run's export, rebuild the registry and release, rerun verification, then create 
 For strict external transfer, keep the default required controls enabled. Relax them only for
 internal exception workflows, and keep the reason in `notes`. Store the ZIP together with
 `handoff_release_bundle_manifest.json` so recipients can verify the archive SHA-256 independently.
+Before and after copying the package, generate the verification report documented in
+`docs/handoff-release-bundle-verification.md`.
